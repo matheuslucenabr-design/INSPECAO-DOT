@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "inspections": {
+      "title": "Inspeção",
+      "description": "Registros de inspeções técnicas de campo com fotos, localização GPS e dados de equipe",
+      "fields": {
+        "id": { "type": "string", "description": "ID sequencial da inspeção (INS-YYYY-NNNNNN)" },
+        "uuid": { "type": "string", "description": "UUID único do documento" },
+        "status": { "type": "string", "description": "Status da inspeção (concluida, rascunho, processando)" },
+        "dataCriacao": { "type": "string", "description": "Data e hora de criação" },
+        "dataEnvio": { "type": "string", "description": "Data e hora de envio" },
+        "obra": { "type": "string", "description": "Nome da obra ou empreendimento" },
+        "equipe": { "type": "string", "description": "Código da equipe técnica" },
+        "tecnicoResponsavel": { "type": "string", "description": "Nome do técnico responsável" },
+        "local": { "type": "string", "description": "Local específico da inspeção" },
+        "tipoInspecao": { "type": "string", "description": "Categoria ou tipo de inspeção" },
+        "responsavel": { "type": "string", "description": "Responsável" },
+        "matricula": { "type": "string", "description": "Matrícula do técnico" },
+        "observacaoGeral": { "type": "string", "description": "Observações gerais técnicas" },
+        "localizacao": { "type": "object", "description": "Dados de geolocalização GPS" },
+        "fotos": { "type": "array", "description": "Fotos técnicas com legendas" },
+        "sincronizado": { "type": "boolean", "description": "Flag de sincronização" },
+        "versaoApp": { "type": "string", "description": "Versão do aplicativo" },
+        "createdAt": { "type": "string", "description": "Timestamp de criação ISO" },
+        "updatedAt": { "type": "string", "description": "Timestamp de atualização ISO" }
+      }
+    },
+    "app_config": {
+      "title": "Configurações da Aplicação",
+      "description": "Tipos de inspeção customizados e parâmetros do sistema",
+      "fields": {
+        "key": { "type": "string", "description": "Chave da configuração" },
+        "types": { "type": "array", "description": "Lista de tipos de inspeção" },
+        "updatedAt": { "type": "string", "description": "Data de atualização" }
+      }
+    }
+  },
+  "firestoreRules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}"
+}

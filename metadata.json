@@ -1,0 +1,11 @@
+{
+  "name": "INSPEÇÃO PRONTO!",
+  "description": "Sistema mobile-first para registro, documentação fotográfica com compressão, geolocalização e exportação de inspeções em campo com persistência em nuvem Firebase Firestore e sincronização em tempo real.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
