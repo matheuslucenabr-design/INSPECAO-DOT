@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { CheckCircle2, AlertTriangle, Send, ArrowLeft, Building, Layers, Camera, UserCheck, MapPin, FileText, Lock, Sparkles } from 'lucide-react';
-import { Inspection, InspectionPhoto, GPSLocation } from '../../types/inspection';
+import { CheckCircle2, AlertTriangle, Send, ArrowLeft, Lock, Sparkles } from 'lucide-react';
+import { InspectionPhoto, GPSLocation } from '../../types/inspection';
 
 interface Step6Props {
   formData: {
@@ -77,7 +77,7 @@ export const Step6Review: React.FC<Step6Props> = ({
       step: 3,
       value: `${formData.fotos.length}/15 fotos`,
       isComplete: formData.fotos.length > 0,
-      required: false, // Strongly recommended
+      required: false,
       warningText: formData.fotos.length === 0 ? 'Nenhuma foto anexada' : undefined,
     },
     {
@@ -111,7 +111,7 @@ export const Step6Review: React.FC<Step6Props> = ({
   const canSubmit = pendingRequired.length === 0;
 
   const handleFinalSubmit = async () => {
-    if (isSubmitting) return; // Prevent double submission
+    if (isSubmitting) return;
     setIsSubmitting(true);
     try {
       await onSubmit();
@@ -124,23 +124,23 @@ export const Step6Review: React.FC<Step6Props> = ({
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="border-b border-slate-800 pb-4">
-          <div className="flex items-center gap-2.5 text-sky-400 font-bold text-xs uppercase tracking-wider mb-1">
+      <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="border-b border-[#12346B] pb-4">
+          <div className="flex items-center gap-2.5 text-[#FFFFFF] font-bold text-xs uppercase tracking-wider mb-1">
             <CheckCircle2 className="w-4 h-4" />
             <span>ETAPA 6</span>
           </div>
-          <h2 className="text-xl font-extrabold text-slate-100">
+          <h2 className="text-xl font-extrabold text-[#FFFFFF]">
             REVISÃO E VALIDAÇÃO DA INSPEÇÃO
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-[#A7B0C2] mt-1">
             Verifique o resumo de todas as informações antes do envio definitivo.
           </p>
         </div>
 
         {/* Pending Items Warning */}
         {!canSubmit && (
-          <div className="bg-rose-950/80 border border-rose-800 rounded-xl p-4 text-xs space-y-2">
+          <div className="bg-rose-950/80 border border-rose-800 rounded-none p-4 text-xs space-y-2">
             <div className="flex items-center gap-2 text-rose-300 font-bold">
               <AlertTriangle className="w-4 h-4 text-rose-400" />
               <span>Não é possível enviar a inspeção. Informações obrigatórias pendentes:</span>
@@ -151,7 +151,7 @@ export const Step6Review: React.FC<Step6Props> = ({
                   <button
                     type="button"
                     onClick={() => onJumpToStep(item.step)}
-                    className="underline hover:text-white font-semibold"
+                    className="underline hover:text-white font-semibold cursor-pointer"
                   >
                     {item.label} (Ir para Etapa {item.step})
                   </button>
@@ -162,35 +162,35 @@ export const Step6Review: React.FC<Step6Props> = ({
         )}
 
         {/* Review Table */}
-        <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden bg-slate-800/40">
+        <div className="divide-y divide-[#12346B] border border-[#12346B] rounded-none overflow-hidden bg-[#0F1726]">
           {checklist.map((item) => (
             <div
               key={item.id}
-              className="p-3.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-800/70 transition-colors"
+              className="p-3.5 flex items-center justify-between gap-3 text-xs hover:bg-[#12346B]/40 transition-colors"
             >
               <div className="flex items-center gap-2.5 min-w-[140px]">
-                <span className="font-bold text-slate-300">{item.label}</span>
-                {item.required && <span className="text-rose-500 font-bold">*</span>}
+                <span className="font-bold text-[#FFFFFF]">{item.label}</span>
+                {item.required && <span className="text-[#FFFFFF] font-bold">*</span>}
               </div>
 
-              <div className="flex-1 text-right truncate text-slate-200">
-                <span className="text-slate-400">{item.value || '-'}</span>
+              <div className="flex-1 text-right truncate text-[#FFFFFF]">
+                <span className="text-[#A7B0C2]">{item.value || '-'}</span>
               </div>
 
               <div className="shrink-0 flex items-center gap-2">
                 {item.isComplete && !item.warningText ? (
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-bold text-[11px] flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> Preenchido
+                  <span className="px-2 py-0.5 rounded-none bg-[#0A1D3D] border border-[#12346B] text-[#FFFFFF] font-bold text-[11px] flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-[#FFFFFF]" /> Preenchido
                   </span>
                 ) : item.warningText ? (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-800 text-amber-400 font-semibold text-[11px]">
+                  <span className="px-2 py-0.5 rounded-none bg-[#0A1D3D] border border-[#12346B] text-[#A7B0C2] font-semibold text-[11px]">
                     {item.warningText}
                   </span>
                 ) : (
                   <button
                     type="button"
                     onClick={() => onJumpToStep(item.step)}
-                    className="px-2 py-0.5 rounded-full bg-rose-950/80 border border-rose-800 text-rose-300 font-bold text-[11px] hover:bg-rose-900"
+                    className="px-2 py-0.5 rounded-none bg-rose-950/80 border border-rose-800 text-rose-300 font-bold text-[11px] hover:bg-rose-900 cursor-pointer"
                   >
                     Pendente
                   </button>
@@ -199,7 +199,7 @@ export const Step6Review: React.FC<Step6Props> = ({
                 <button
                   type="button"
                   onClick={() => onJumpToStep(item.step)}
-                  className="text-slate-400 hover:text-sky-400 text-[11px] underline ml-1"
+                  className="text-[#A7B0C2] hover:text-[#FFFFFF] text-[11px] underline ml-1 cursor-pointer"
                 >
                   Editar
                 </button>
@@ -209,15 +209,15 @@ export const Step6Review: React.FC<Step6Props> = ({
         </div>
 
         {/* Summary Details Card */}
-        <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-2 text-xs text-slate-300">
+        <div className="bg-[#0F1726] border border-[#12346B] rounded-none p-4 space-y-2 text-xs text-[#FFFFFF]">
           <div className="flex justify-between">
-            <span className="text-slate-400">Total de Fotografias Anexadas:</span>
-            <span className="font-bold text-sky-400">{formData.fotos.length} fotos</span>
+            <span className="text-[#A7B0C2]">Total de Fotografias Anexadas:</span>
+            <span className="font-bold text-[#FFFFFF]">{formData.fotos.length} fotos</span>
           </div>
           {formData.localizacao && !formData.localizacao.semGps && (
             <div className="flex justify-between">
-              <span className="text-slate-400">Georreferenciamento:</span>
-              <span className="font-semibold text-emerald-400">
+              <span className="text-[#A7B0C2]">Georreferenciamento:</span>
+              <span className="font-semibold text-[#FFFFFF]">
                 {formData.localizacao.latitude.toFixed(4)}°, {formData.localizacao.longitude.toFixed(4)}°
               </span>
             </div>
@@ -227,38 +227,38 @@ export const Step6Review: React.FC<Step6Props> = ({
 
       {/* Confirmation Modal */}
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-[#0F1726]/80 flex items-center justify-center p-4">
+          <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-6 max-w-md w-full shadow-2xl space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-sky-600/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
+              <div className="w-10 h-10 rounded-none bg-[#12346B] border border-[#12346B] flex items-center justify-center text-[#FFFFFF]">
                 <Send className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-slate-100">
+                <h3 className="text-lg font-bold text-[#FFFFFF]">
                   Enviar Inspeção?
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-[#A7B0C2]">
                   Validação e gravação definitiva
                 </p>
               </div>
             </div>
 
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Após o envio, este registro será armazenado na base de dados como <strong>inspeção concluída</strong> e disponibilizado para relatórios em PDF e Excel.
+            <p className="text-sm text-[#A7B0C2] leading-relaxed">
+              Após o envio, este registro será armazenado na base de dados como <strong className="text-[#FFFFFF]">inspeção concluída</strong> e disponibilizado para relatórios em PDF e Excel.
             </p>
 
-            <div className="bg-slate-800/90 rounded-xl p-3.5 border border-slate-700/60 text-xs space-y-1.5">
+            <div className="bg-[#0F1726] rounded-none p-3.5 border border-[#12346B] text-xs space-y-1.5">
               <div className="flex justify-between">
-                <span className="text-slate-400">Obra:</span>
-                <span className="font-semibold text-slate-200">{formData.obra}</span>
+                <span className="text-[#A7B0C2]">Obra:</span>
+                <span className="font-semibold text-[#FFFFFF]">{formData.obra}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Equipe:</span>
-                <span className="font-semibold text-slate-200">{formData.equipe}</span>
+                <span className="text-[#A7B0C2]">Equipe:</span>
+                <span className="font-semibold text-[#FFFFFF]">{formData.equipe}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Fotos:</span>
-                <span className="font-semibold text-sky-400">{formData.fotos.length} fotos</span>
+                <span className="text-[#A7B0C2]">Fotos:</span>
+                <span className="font-semibold text-[#FFFFFF]">{formData.fotos.length} fotos</span>
               </div>
             </div>
 
@@ -267,7 +267,7 @@ export const Step6Review: React.FC<Step6Props> = ({
                 type="button"
                 disabled={isSubmitting}
                 onClick={() => setShowConfirmModal(false)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold rounded-xl transition-colors"
+                className="flex-1 py-3 bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] text-sm font-semibold rounded-none border border-[#A7B0C2]/30 transition-colors cursor-pointer"
               >
                 Cancelar
               </button>
@@ -275,7 +275,7 @@ export const Step6Review: React.FC<Step6Props> = ({
                 type="button"
                 disabled={isSubmitting}
                 onClick={handleFinalSubmit}
-                className="flex-1 py-3 bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold rounded-xl shadow-lg shadow-sky-950 flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="flex-1 py-3 bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] text-sm font-bold rounded-none border border-[#A7B0C2]/30 shadow-md flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 {isSubmitting ? (
                   <>
@@ -299,7 +299,7 @@ export const Step6Review: React.FC<Step6Props> = ({
         <button
           type="button"
           onClick={onPrev}
-          className="py-3 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+          className="py-3 px-5 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] text-sm font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#A7B0C2]/30"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Voltar</span>
@@ -309,10 +309,10 @@ export const Step6Review: React.FC<Step6Props> = ({
           type="button"
           disabled={!canSubmit || isSubmitting}
           onClick={() => setShowConfirmModal(true)}
-          className={`py-3.5 px-8 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all ${
+          className={`py-3.5 px-8 rounded-none font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all ${
             canSubmit && !isSubmitting
-              ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950 cursor-pointer active:scale-98'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
+              ? 'bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] border border-[#A7B0C2]/30 cursor-pointer active:scale-98'
+              : 'bg-[#12346B]/40 text-[#A7B0C2]/50 cursor-not-allowed border border-[#12346B]/40'
           }`}
         >
           <Send className="w-4 h-4" />

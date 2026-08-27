@@ -14,7 +14,7 @@ import {
   getSavedDraft,
   saveDraft,
   clearDraft,
-  generateInspectionId,
+  generateUniqueInspectionId,
   DEFAULT_INSPECTION_TYPES,
   setupRealtimeSync,
 } from './utils/storage';
@@ -196,11 +196,16 @@ export default function App() {
   const handleSubmitInspection = async () => {
     const now = new Date();
     const formattedNow = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    const timestamp = now.getTime();
+    const newId = generateUniqueInspectionId();
+    const newUuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `uuid-${timestamp}-${Math.random().toString(36).substring(2, 9)}`;
 
-    const newId = generateInspectionId(inspections.length);
     const completedInspection: Inspection = {
       id: newId,
-      uuid: `uuid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      uuid: newUuid,
+      timestamp: timestamp,
       status: 'concluida',
       dataCriacao: formattedNow,
       dataEnvio: formattedNow,
@@ -216,10 +221,12 @@ export default function App() {
       localizacao: formData.localizacao,
       sincronizado: true,
       versaoApp: '2.0.0',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
     };
 
-    // Update state instantly and persist to system central database
-    setInspections((prev) => [completedInspection, ...prev]);
+    // Update state instantly (accumulate without overwriting previous inspections) and persist to Firebase Firestore
+    setInspections((prev) => [completedInspection, ...prev.filter((i) => i.id !== completedInspection.id && i.uuid !== completedInspection.uuid)]);
     await saveInspection(completedInspection);
     clearDraft();
     setSubmittedInspection(completedInspection);
@@ -240,7 +247,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-sky-500 selection:text-white">
+    <div className="min-h-screen bg-[#0F1726] text-[#FFFFFF] flex flex-col selection:bg-[#12346B] selection:text-[#FFFFFF]">
       {/* 1. Header */}
       <Header
         isOnline={isOnline}
@@ -255,9 +262,9 @@ export default function App() {
       />
 
       {/* 2. Main Content Area */}
-      <main className="flex-1 pb-20 md:pb-8">
+      <main className="flex-1 pb-18 md:pb-8">
         {currentTab === 'inspecao' && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+          <div className="max-w-7xl mx-auto px-2.5 sm:px-6 py-3 sm:py-6">
             {submittedInspection ? (
               <Step7Success
                 inspection={submittedInspection}

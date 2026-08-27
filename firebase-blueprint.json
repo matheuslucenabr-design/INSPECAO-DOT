@@ -4,8 +4,9 @@
       "title": "Inspeção",
       "description": "Registros de inspeções técnicas de campo com fotos, localização GPS e dados de equipe",
       "fields": {
-        "id": { "type": "string", "description": "ID sequencial da inspeção (INS-YYYY-NNNNNN)" },
-        "uuid": { "type": "string", "description": "UUID único do documento" },
+        "id": { "type": "string", "description": "Protocolo / ID único não colidente da inspeção (ex: REG-XXXX-XXXX)" },
+        "uuid": { "type": "string", "description": "UUID único do documento para indexação e integridade" },
+        "timestamp": { "type": "number", "description": "Timestamp em milissegundos para ordenação cronológica precisa" },
         "status": { "type": "string", "description": "Status da inspeção (concluida, rascunho, processando)" },
         "dataCriacao": { "type": "string", "description": "Data e hora de criação" },
         "dataEnvio": { "type": "string", "description": "Data e hora de envio" },

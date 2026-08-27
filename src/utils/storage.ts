@@ -1,14 +1,7 @@
-/**
- * Firebase Firestore Persistence & Storage Engine for INSPEÇÃO PRONTO!
- * Direct real-time cloud sync with Firebase Firestore + local cache (IndexedDB + localStorage)
- * ensuring 100% offline resilience and instant multi-device synchronization.
- */
-
 import {
   collection,
   doc,
   getDocs,
-  getDoc,
   setDoc,
   deleteDoc,
   onSnapshot,
@@ -16,7 +9,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Inspection } from '../types/inspection';
-import { createPlaceholderPhotoUrl } from './imageProcessor';
 
 const DB_NAME = 'inspecao_pronto_local_db_v2';
 const DB_VERSION = 1;
@@ -48,12 +40,14 @@ export const DEFAULT_SITES = [
 ];
 
 /**
- * Sequential ID generator: INS-YYYY-NNNNNN
+ * Guaranteed globally unique inspection registration identifier
+ * Generates unique non-colliding IDs (timestamp + random entropy)
+ * so that new inspections never overwrite or replace previous ones.
  */
-export function generateInspectionId(existingCount: number = 0): string {
-  const currentYear = new Date().getFullYear();
-  const sequence = String(existingCount + 1).padStart(6, '0');
-  return `INS-${currentYear}-${sequence}`;
+export function generateUniqueInspectionId(): string {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase();
+  return `REG-${timestamp}-${randomPart}`;
 }
 
 /**
@@ -86,126 +80,46 @@ function openLocalDatabase(): Promise<IDBDatabase> {
   });
 }
 
-/**
- * Initial Demo Inspections Seed
- */
-function createInitialSeedData(): Inspection[] {
-  const photo1 = createPlaceholderPhotoUrl('Subestação Norte', 'Painel Geral de Baixa Tensão QGBT-01');
-  const photo2 = createPlaceholderPhotoUrl('Subestação Norte', 'Barramento e conexões isoladas');
-  const photo3 = createPlaceholderPhotoUrl('Rede Aérea Centro', 'Fixação de luminária LED 150W');
-
-  return [
-    {
-      id: 'INS-2026-000152',
-      uuid: 'seed-uuid-1',
-      status: 'concluida',
-      dataCriacao: '25/08/2026 14:15',
-      dataEnvio: '25/08/2026 15:47',
-      obra: 'Subestação Norte',
-      equipe: 'EBP01',
-      tecnicoResponsavel: 'João Silva',
-      local: 'Sala Elétrica 03 - Painéis MT/BT',
-      tipoInspecao: 'Inspeção Pós-Serviço',
-      responsavel: 'João Silva',
-      matricula: 'TEC-9842',
-      observacaoGeral: 'Inspeção pós-manutenção concluída. Todos os circuitos restabelecidos e torqueamento de barramentos verificado conforme norma técnica.',
-      localizacao: {
-        latitude: -23.55052,
-        longitude: -46.633308,
-        precisao: 8,
-        dataCaptura: '25/08/2026 às 14:20',
-        endereco: 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP',
-      },
-      fotos: [
-        {
-          id: 'photo-1',
-          numero: 1,
-          dataUrl: photo1,
-          legenda: 'Identificação e sinalização de segurança do painel QGBT-01 conferidas.',
-          dataUpload: '25/08/2026 14:22',
-          largura: 800,
-          altura: 600,
-          tamanhoKb: 84,
-          nomeArquivo: 'foto_painel_qgbt.jpg',
-        },
-        {
-          id: 'photo-2',
-          numero: 2,
-          dataUrl: photo2,
-          legenda: 'Barramentos principais com aperto conferido e etiquetas de calibração.',
-          dataUpload: '25/08/2026 14:25',
-          largura: 800,
-          altura: 600,
-          tamanhoKb: 92,
-          nomeArquivo: 'foto_barramento.jpg',
-        },
-      ],
-      sincronizado: true,
-      versaoApp: '2.0.0',
-    },
-    {
-      id: 'INS-2026-000151',
-      uuid: 'seed-uuid-2',
-      status: 'concluida',
-      dataCriacao: '25/08/2026 09:30',
-      dataEnvio: '25/08/2026 10:12',
-      obra: 'Rede Urbana Setor Leste',
-      equipe: 'EQUIPE-ALFA',
-      tecnicoResponsavel: 'Mariana Costa',
-      local: 'Poste P-44 / Av. Central',
-      tipoInspecao: 'Inspeção de Luminárias',
-      responsavel: 'Mariana Costa',
-      matricula: 'ENG-3310',
-      observacaoGeral: 'Substituição de luminárias por modelo LED de alta eficiência. Teste de acendimento realizado com sucesso.',
-      localizacao: {
-        latitude: -22.906847,
-        longitude: -43.172896,
-        precisao: 12,
-        dataCaptura: '25/08/2026 às 09:35',
-        endereco: 'Rua Primeiro de Março, Centro, Rio de Janeiro - RJ',
-      },
-      fotos: [
-        {
-          id: 'photo-3',
-          numero: 1,
-          dataUrl: photo3,
-          legenda: 'Luminária LED devidamente alinhada no braço metálico e com conector estanque.',
-          dataUpload: '25/08/2026 09:40',
-          largura: 800,
-          altura: 600,
-          tamanhoKb: 78,
-          nomeArquivo: 'luminaria_poste44.jpg',
-        },
-      ],
-      sincronizado: true,
-      versaoApp: '2.0.0',
-    },
-  ];
-}
-
 // ---------------- LOCALSTORAGE & INDEXEDDB CACHE ---------------- //
 
 /**
- * Get cached inspections instantly (synchronous)
+ * Filter out any leftover sample/mock inspection IDs
+ */
+function isSeedInspection(item: any): boolean {
+  if (!item) return true;
+  const id = item.id || '';
+  const uuid = item.uuid || '';
+  return (
+    id === 'REG-2026-SE01-A1' ||
+    id === 'REG-2026-SE02-B2' ||
+    uuid === 'seed-uuid-1' ||
+    uuid === 'seed-uuid-2' ||
+    id.startsWith('seed-')
+  );
+}
+
+/**
+ * Get cached inspections instantly (synchronous) - starts 100% clean with empty list
  */
 export function getStoredInspections(): Inspection[] {
   try {
     const raw = localStorage.getItem(STORAGE_FALLBACK_KEY);
     if (!raw) {
-      const initial = createInitialSeedData();
-      saveAllInspections(initial, false);
-      return initial;
+      return [];
     }
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      const initial = createInitialSeedData();
-      saveAllInspections(initial, false);
-      return initial;
+    if (!Array.isArray(parsed)) {
+      return [];
     }
-    return parsed;
+    // Filter out any leftover seed records from previous sessions
+    const cleaned = parsed.filter((item) => !isSeedInspection(item));
+    if (cleaned.length !== parsed.length) {
+      saveAllInspections(cleaned, false);
+    }
+    return cleaned;
   } catch (err) {
     console.error('Erro ao ler cache local:', err);
-    return createInitialSeedData();
+    return [];
   }
 }
 
@@ -214,14 +128,15 @@ export function getStoredInspections(): Inspection[] {
  */
 export function saveAllInspections(inspections: Inspection[], pushToServer: boolean = true): void {
   try {
-    localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(inspections));
+    const sanitized = inspections.filter((item) => !isSeedInspection(item));
+    localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(sanitized));
 
     // Mirror to IndexedDB
     openLocalDatabase().then((localDb) => {
       const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
       const store = tx.objectStore(STORE_INSPECTIONS);
       store.clear();
-      inspections.forEach((item) => store.put(item));
+      sanitized.forEach((item) => store.put(item));
     }).catch((e) => console.debug('IndexedDB mirror sync:', e));
   } catch (err) {
     console.error('Erro ao salvar no armazenamento local:', err);
@@ -230,25 +145,33 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
 
 // ---------------- FIREBASE FIRESTORE INTEGRATION ---------------- //
 
-let hasSeededFirestore = false;
+/**
+ * Helper to sort inspections chronologically (newest first)
+ */
+export function sortInspectionsDescending(items: Inspection[]): Inspection[] {
+  return [...items]
+    .filter((item) => !isSeedInspection(item))
+    .sort((a, b) => {
+      const timeA = a.timestamp || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+      const timeB = b.timestamp || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+      if (timeA && timeB && timeA !== timeB) {
+        return timeB - timeA;
+      }
+      const dateA = a.dataEnvio || a.dataCriacao || '';
+      const dateB = b.dataEnvio || b.dataCriacao || '';
+      return dateB.localeCompare(dateA);
+    });
+}
 
 /**
- * Seed initial sample records into Firebase Firestore if empty
+ * Clean any leftover seed documents from Firestore
  */
-async function seedFirestoreIfEmpty(currentCount: number): Promise<void> {
-  if (hasSeededFirestore || currentCount > 0) return;
-  hasSeededFirestore = true;
-
-  try {
-    const seedData = createInitialSeedData();
-    const batch = writeBatch(db);
-    seedData.forEach((insp) => {
-      const docRef = doc(db, 'inspections', insp.id);
-      batch.set(docRef, { ...insp, createdAt: new Date().toISOString() });
-    });
-    await batch.commit();
-  } catch (e) {
-    console.warn('Erro ao inicializar dados seed no Firestore:', e);
+export async function purgeSeedDataFromFirestore(): Promise<void> {
+  const seedIds = ['REG-2026-SE01-A1', 'REG-2026-SE02-B2'];
+  for (const id of seedIds) {
+    try {
+      await deleteDoc(doc(db, 'inspections', id));
+    } catch {}
   }
 }
 
@@ -256,22 +179,26 @@ async function seedFirestoreIfEmpty(currentCount: number): Promise<void> {
  * Fetch all inspections directly from Firebase Firestore with backend fallback
  */
 export async function fetchServerInspections(): Promise<Inspection[]> {
+  // Purge any seed docs if they exist
+  purgeSeedDataFromFirestore().catch(() => {});
+
   try {
     const querySnapshot = await getDocs(collection(db, 'inspections'));
     const items: Inspection[] = [];
     querySnapshot.forEach((docSnap) => {
-      items.push(docSnap.data() as Inspection);
+      const data = docSnap.data() as Inspection;
+      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docSnap.id })) {
+        items.push({
+          ...data,
+          id: data.id || docSnap.id,
+          uuid: data.uuid || data.id || docSnap.id,
+        });
+      }
     });
 
-    if (items.length > 0) {
-      items.sort((a, b) => (b.id || '').localeCompare(a.id || ''));
-      saveAllInspections(items, false);
-      return items;
-    } else {
-      // Seed Firestore with initial sample data so it's ready immediately
-      await seedFirestoreIfEmpty(0);
-      return getStoredInspections();
-    }
+    const sorted = sortInspectionsDescending(items);
+    saveAllInspections(sorted, false);
+    return sorted;
   } catch (firebaseErr) {
     console.warn('Firestore indisponível temporariamente, tentando servidor/cache:', firebaseErr);
     
@@ -283,8 +210,9 @@ export async function fetchServerInspections(): Promise<Inspection[]> {
       if (response.ok) {
         const data = await response.json();
         if (data && Array.isArray(data.inspections)) {
-          saveAllInspections(data.inspections, false);
-          return data.inspections;
+          const sorted = sortInspectionsDescending(data.inspections);
+          saveAllInspections(sorted, false);
+          return sorted;
         }
       }
     } catch {}
@@ -294,13 +222,21 @@ export async function fetchServerInspections(): Promise<Inspection[]> {
 
 /**
  * Save single inspection directly into Firebase Firestore & local cache
+ * Ensures that each inspection is treated as an independent document that accumulates permanently.
  */
 export async function saveInspection(inspection: Inspection): Promise<void> {
   const current = getStoredInspections();
-  const existingIndex = current.findIndex((i) => i.uuid === inspection.uuid || i.id === inspection.id);
+  
+  // Find only if exact matching uuid or id exists
+  const existingIndex = current.findIndex(
+    (i) => (inspection.uuid && i.uuid === inspection.uuid) || (inspection.id && i.id === inspection.id)
+  );
 
-  const updatedInspection = {
+  const updatedInspection: Inspection = {
     ...inspection,
+    id: inspection.id || inspection.uuid || generateUniqueInspectionId(),
+    uuid: inspection.uuid || inspection.id || generateUniqueInspectionId(),
+    timestamp: inspection.timestamp || Date.now(),
     sincronizado: true,
     updatedAt: new Date().toISOString(),
   };
@@ -311,11 +247,12 @@ export async function saveInspection(inspection: Inspection): Promise<void> {
     current.unshift(updatedInspection);
   }
 
-  saveAllInspections(current, false);
+  const sortedList = sortInspectionsDescending(current);
+  saveAllInspections(sortedList, false);
 
-  // 1. Direct Firebase Firestore Write
+  // 1. Direct Firebase Firestore Write (Using unique doc ID)
   try {
-    const docId = inspection.id || inspection.uuid;
+    const docId = updatedInspection.id;
     const docRef = doc(db, 'inspections', docId);
     await setDoc(docRef, updatedInspection, { merge: true });
   } catch (firestoreErr) {
@@ -451,21 +388,14 @@ export function setupRealtimeSync(
         const list: Inspection[] = [];
         snapshot.forEach((d) => {
           const item = d.data() as Inspection;
-          if (item && item.id) {
+          if (item && item.id && !isSeedInspection(item) && !isSeedInspection({ id: d.id })) {
             list.push(item);
           }
         });
 
-        if (list.length > 0) {
-          list.sort((a, b) => (b.id || '').localeCompare(a.id || ''));
-          saveAllInspections(list, false);
-          onInspectionsUpdate(list);
-        } else {
-          // If Firestore is completely empty on first launch, seed it
-          seedFirestoreIfEmpty(0).then(() => {
-            onInspectionsUpdate(getStoredInspections());
-          });
-        }
+        const sorted = sortInspectionsDescending(list);
+        saveAllInspections(sorted, false);
+        onInspectionsUpdate(sorted);
       },
       (error) => {
         console.warn('Firebase Firestore realtime listener error:', error);
@@ -502,8 +432,9 @@ export function setupRealtimeSync(
         try {
           const data = JSON.parse(event.data);
           if (data && Array.isArray(data.inspections)) {
-            saveAllInspections(data.inspections, false);
-            onInspectionsUpdate(data.inspections);
+            const cleanList = sortInspectionsDescending(data.inspections);
+            saveAllInspections(cleanList, false);
+            onInspectionsUpdate(cleanList);
           }
         } catch {}
       });
@@ -527,7 +458,12 @@ export async function exportDatabaseBackup(): Promise<void> {
   try {
     const snapshot = await getDocs(collection(db, 'inspections'));
     const firestoreList: Inspection[] = [];
-    snapshot.forEach((d) => firestoreList.push(d.data() as Inspection));
+    snapshot.forEach((d) => {
+      const data = d.data() as Inspection;
+      if (data && !isSeedInspection(data)) {
+        firestoreList.push(data);
+      }
+    });
     if (firestoreList.length > 0) inspections = firestoreList;
   } catch {}
 
@@ -566,7 +502,7 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
 
     current.forEach((item) => map.set(item.id, item));
     parsed.inspections.forEach((item: Inspection) => {
-      if (item.id) map.set(item.id, item);
+      if (item.id && !isSeedInspection(item)) map.set(item.id, item);
     });
 
     const merged = Array.from(map.values()).sort((a, b) => b.id.localeCompare(a.id));

@@ -22,11 +22,14 @@ export interface GPSLocation {
 }
 
 export interface Inspection {
-  id: string; // e.g. "INS-2026-000152"
+  id: string; // Unique non-colliding registration ID (e.g. REG-XXXX-XXXX)
   uuid: string; // internal unique key for deduplication
   status: InspectionStatus;
   dataCriacao: string;
   dataEnvio?: string;
+  timestamp?: number; // Millisecond timestamp for chronological sorting
+  createdAt?: string;
+  updatedAt?: string;
   
   // Etapa 1: Identificação
   obra: string;

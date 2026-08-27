@@ -1,7 +1,7 @@
 /**
  * Professional PDF Export for INSPEÇÃO PRONTO!
- * Implements clean document layout with company header, structured tables,
- * photographic evidence with captions, GPS coordinates, and signatures.
+ * Technical layout with 100% square borders, structured tables,
+ * photographic evidence with captions, GPS coordinates, and institutional palette.
  */
 
 import jsPDF from 'jspdf';
@@ -20,30 +20,39 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
   const contentWidth = pageWidth - margin * 2;
   let currentY = margin;
 
-  const primaryColor = [2, 132, 199]; // #0284c7 (Sky/Blue)
-  const darkTextColor = [15, 23, 42]; // #0f172a
-  const mutedTextColor = [71, 85, 105]; // #475569
-  const lightBg = [248, 250, 252]; // #f8fafc
-  const borderColor = [226, 232, 240]; // #e2e8f0
+  // Institutional Palette
+  const navyColor = [10, 29, 61]; // #0A1D3D
+  const deepBlueColor = [18, 52, 107]; // #12346B
+  const whiteAccent = [255, 255, 255]; // #FFFFFF
+  const darkTextColor = [15, 23, 38]; // #0F1726
+  const mutedTextColor = [110, 125, 150];
+  const lightBg = [245, 247, 250];
+  const borderColor = [200, 210, 225];
 
   // Helper to add header on top of every page
   const drawHeader = (isFirstPage: boolean) => {
     // Top banner
-    doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+    doc.setFillColor(navyColor[0], navyColor[1], navyColor[2]);
     doc.rect(margin, currentY, contentWidth, isFirstPage ? 22 : 12, 'F');
+
+    // Accent line in White / Blue border
+    doc.setFillColor(deepBlueColor[0], deepBlueColor[1], deepBlueColor[2]);
+    doc.rect(margin, currentY + (isFirstPage ? 22 : 12) - 1.5, contentWidth, 1.5, 'F');
 
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(isFirstPage ? 16 : 10);
+    doc.setFontSize(isFirstPage ? 15 : 10);
     doc.text('INSPEÇÃO PRONTO!', margin + 6, currentY + (isFirstPage ? 9 : 7));
 
-    doc.setFontSize(isFirstPage ? 9 : 8);
+    doc.setFontSize(isFirstPage ? 8.5 : 7.5);
     doc.setFont('helvetica', 'normal');
-    doc.text('RELATÓRIO TÉCNICO DE INSPEÇÃO EM CAMPO', margin + 6, currentY + (isFirstPage ? 16 : 10));
+    doc.setTextColor(220, 230, 245);
+    doc.text('RELATÓRIO TÉCNICO DE INSPEÇÃO EM CAMPO', margin + 6, currentY + (isFirstPage ? 15.5 : 9.5));
 
     // Inspection ID on right side
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(isFirstPage ? 12 : 9);
+    doc.setTextColor(whiteAccent[0], whiteAccent[1], whiteAccent[2]);
     doc.text(inspection.id, pageWidth - margin - 6, currentY + (isFirstPage ? 10 : 8), { align: 'right' });
 
     currentY += isFirstPage ? 26 : 16;
@@ -63,7 +72,7 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
     doc.text(pageStr, pageWidth - margin, pageHeight - 7, { align: 'right' });
   };
 
-  // Helper for section headers
+  // Helper for section headers with 100% square edges
   const drawSectionTitle = (title: string, iconStr: string = '') => {
     if (currentY > pageHeight - 40) {
       doc.addPage();
@@ -75,11 +84,11 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
     doc.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
     doc.rect(margin, currentY, contentWidth, 7, 'FD');
 
-    doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+    doc.setFillColor(deepBlueColor[0], deepBlueColor[1], deepBlueColor[2]);
     doc.rect(margin, currentY, 3, 7, 'F');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setTextColor(darkTextColor[0], darkTextColor[1], darkTextColor[2]);
     doc.text(`${iconStr} ${title}`.trim(), margin + 6, currentY + 5);
 
@@ -90,7 +99,7 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
   drawHeader(true);
 
   // Metadata summary line
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(mutedTextColor[0], mutedTextColor[1], mutedTextColor[2]);
   doc.text(`Data do Envio: ${inspection.dataEnvio || inspection.dataCriacao}`, margin, currentY);
@@ -121,7 +130,7 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
 
     // Field 1
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setTextColor(mutedTextColor[0], mutedTextColor[1], mutedTextColor[2]);
     doc.text(f1.label, idCol1X, currentY);
     doc.setFont('helvetica', 'normal');
@@ -148,7 +157,7 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
 
   if (inspection.localizacao && !inspection.localizacao.semGps) {
     const loc = inspection.localizacao;
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
 
     // Coordinates row
     doc.setFont('helvetica', 'bold');
@@ -195,7 +204,7 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
       currentY += splitAddress.length * 4.5;
     }
   } else {
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'italic');
     doc.setTextColor(mutedTextColor[0], mutedTextColor[1], mutedTextColor[2]);
     doc.text('Localização GPS não registrada (campo operado sem sinal ou dispensado).', idCol1X, currentY);
@@ -208,16 +217,16 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
   if (inspection.observacaoGeral && inspection.observacaoGeral.trim()) {
     drawSectionTitle('OBSERVAÇÕES GERAIS DA INSPEÇÃO');
 
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(darkTextColor[0], darkTextColor[1], darkTextColor[2]);
 
     const splitObs = doc.splitTextToSize(inspection.observacaoGeral, contentWidth - 8);
     
-    // Background box
+    // Background box with 100% square edges
     doc.setFillColor(lightBg[0], lightBg[1], lightBg[2]);
     doc.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
-    doc.roundedRect(margin, currentY, contentWidth, (splitObs.length * 4.5) + 6, 2, 2, 'FD');
+    doc.rect(margin, currentY, contentWidth, (splitObs.length * 4.5) + 6, 'FD');
 
     doc.text(splitObs, margin + 4, currentY + 5);
     currentY += (splitObs.length * 4.5) + 10;
@@ -227,7 +236,6 @@ export async function generateInspectionPdf(inspection: Inspection): Promise<voi
   if (inspection.fotos && inspection.fotos.length > 0) {
     drawSectionTitle(`REGISTRO FOTOGRÁFICO (${inspection.fotos.length} FOTOGRAFIAS)`);
 
-    // Render photos 2 per page or 2 per row
     const photoBoxWidth = (contentWidth - 6) / 2; // ~88mm each
     const photoBoxHeight = 58;
 
@@ -275,23 +283,23 @@ function drawPhotoItem(
   boxWidth: number,
   boxHeight: number
 ) {
-  // Border box
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(x, y, boxWidth, boxHeight + 20, 2, 2, 'FD');
+  // Border box - 100% square edges
+  doc.setFillColor(245, 247, 250);
+  doc.setDrawColor(200, 210, 225);
+  doc.rect(x, y, boxWidth, boxHeight + 20, 'FD');
 
-  // Badge header: Foto 01
-  doc.setFillColor(2, 132, 199);
-  doc.roundedRect(x + 3, y + 3, 26, 5, 1, 1, 'F');
+  // Badge header: Foto 01 - 100% square edges
+  doc.setFillColor(18, 52, 107);
+  doc.rect(x + 3, y + 3, 26, 5, 'F');
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(255, 255, 255); // White text on deep blue badge
   doc.text(`FOTO ${String(photo.numero).padStart(2, '0')}`, x + 5, y + 6.8);
 
   if (photo.dataUpload) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
+    doc.setTextColor(110, 125, 150);
     doc.text(photo.dataUpload, x + boxWidth - 3, y + 6.8, { align: 'right' });
   }
 
@@ -308,11 +316,11 @@ function drawPhotoItem(
   // Photo Caption / Legenda
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(71, 85, 105);
+  doc.setTextColor(18, 52, 107);
   doc.text('Legenda:', x + 3, y + boxHeight + 3);
 
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(15, 23, 42);
+  doc.setTextColor(15, 23, 38);
   const captionText = photo.legenda && photo.legenda.trim() ? photo.legenda : 'Sem observação específica.';
   const splitCaption = doc.splitTextToSize(captionText, boxWidth - 6);
   doc.text(splitCaption, x + 3, y + boxHeight + 7);

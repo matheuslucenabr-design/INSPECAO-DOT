@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Camera, MapPin, FileText, Table, Eye, Trash2 } from 'lucide-react';
 import { Inspection } from '../../types/inspection';
 import { generateInspectionPdf } from '../../utils/exportPdf';
@@ -15,14 +15,12 @@ export const RecordTable: React.FC<RecordTableProps> = ({
   onOpen,
   onDelete,
 }) => {
-  const [selectedForDelete, setSelectedForDelete] = useState<string | null>(null);
-
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900 shadow-md">
-      <table className="w-full text-left text-xs text-slate-300">
-        <thead className="bg-slate-800/90 text-[11px] font-bold uppercase text-slate-400 border-b border-slate-700">
+    <div className="overflow-x-auto border border-[#12346B] bg-[#0F1726] shadow-md">
+      <table className="w-full text-left text-xs text-[#FFFFFF]">
+        <thead className="bg-[#12346B] text-[11px] font-bold uppercase text-[#FFFFFF] border-b border-[#12346B]">
           <tr>
-            <th className="py-3 px-4">ID / Registro</th>
+            <th className="py-3 px-4">Protocolo / Registro</th>
             <th className="py-3 px-4">Data/Hora</th>
             <th className="py-3 px-4">Obra & Local</th>
             <th className="py-3 px-4">Equipe / Técnico</th>
@@ -32,48 +30,48 @@ export const RecordTable: React.FC<RecordTableProps> = ({
             <th className="py-3 px-4 text-right">Ações</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-800 font-medium">
+        <tbody className="divide-y divide-[#12346B] font-medium">
           {inspections.map((insp) => {
             const hasGps = insp.localizacao && !insp.localizacao.semGps;
 
             return (
               <tr
                 key={insp.id}
-                className="hover:bg-slate-800/50 transition-colors group cursor-pointer"
+                className="hover:bg-[#12346B]/40 transition-colors group cursor-pointer"
                 onClick={() => onOpen(insp)}
               >
                 {/* ID */}
-                <td className="py-3 px-4 font-mono font-bold text-sky-400 whitespace-nowrap">
+                <td className="py-3 px-4 font-mono font-bold text-[#FFFFFF] whitespace-nowrap">
                   {insp.id}
                 </td>
 
                 {/* Data */}
-                <td className="py-3 px-4 text-slate-400 whitespace-nowrap">
+                <td className="py-3 px-4 text-[#A7B0C2] whitespace-nowrap">
                   {insp.dataEnvio || insp.dataCriacao}
                 </td>
 
                 {/* Obra & Local */}
                 <td className="py-3 px-4 max-w-[200px]">
-                  <p className="font-bold text-slate-100 truncate">{insp.obra}</p>
-                  <p className="text-[11px] text-slate-400 truncate">{insp.local}</p>
+                  <p className="font-bold text-[#FFFFFF] truncate">{insp.obra}</p>
+                  <p className="text-[11px] text-[#A7B0C2] truncate">{insp.local}</p>
                 </td>
 
                 {/* Equipe & Técnico */}
                 <td className="py-3 px-4 max-w-[180px]">
-                  <span className="inline-block px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 font-semibold text-[10px] mr-1.5">
+                  <span className="inline-block px-1.5 py-0.5 bg-[#12346B] text-[#FFFFFF] font-semibold text-[10px] mr-1.5 border border-[#A7B0C2]/20">
                     {insp.equipe}
                   </span>
-                  <span className="text-slate-300 text-[11px] truncate">{insp.tecnicoResponsavel}</span>
+                  <span className="text-[#A7B0C2] text-[11px] truncate">{insp.tecnicoResponsavel}</span>
                 </td>
 
                 {/* Tipo */}
-                <td className="py-3 px-4 text-slate-300 whitespace-nowrap">
+                <td className="py-3 px-4 text-[#A7B0C2] whitespace-nowrap">
                   {insp.tipoInspecao}
                 </td>
 
                 {/* Fotos */}
                 <td className="py-3 px-4 text-center whitespace-nowrap">
-                  <span className="inline-flex items-center gap-1 font-bold text-sky-400 bg-sky-950/60 px-2 py-0.5 rounded border border-sky-800/40">
+                  <span className="inline-flex items-center gap-1 font-bold text-[#FFFFFF] bg-[#0A1D3D] px-2 py-0.5 border border-[#12346B]">
                     <Camera className="w-3 h-3" />
                     {insp.fotos.length}
                   </span>
@@ -82,11 +80,11 @@ export const RecordTable: React.FC<RecordTableProps> = ({
                 {/* GPS */}
                 <td className="py-3 px-4 text-center whitespace-nowrap">
                   {hasGps ? (
-                    <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40 text-[11px]">
+                    <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-[#0A1D3D] px-2 py-0.5 border border-emerald-800 text-[11px]">
                       <MapPin className="w-3 h-3" /> OK
                     </span>
                   ) : (
-                    <span className="text-slate-500 text-[11px]">Sem GPS</span>
+                    <span className="text-[#A7B0C2]/60 text-[11px]">Sem GPS</span>
                   )}
                 </td>
 
@@ -98,21 +96,21 @@ export const RecordTable: React.FC<RecordTableProps> = ({
                   <div className="flex items-center justify-end gap-1.5">
                     <button
                       onClick={() => onOpen(insp)}
-                      className="p-1.5 rounded-lg bg-sky-600/20 text-sky-400 hover:bg-sky-600 hover:text-white transition-colors"
+                      className="p-1.5 bg-[#12346B] text-[#FFFFFF] hover:bg-[#12346B]/80 border border-[#A7B0C2]/30 transition-colors cursor-pointer"
                       title="Ver detalhes"
                     >
                       <Eye className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => generateInspectionPdf(insp)}
-                      className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                      className="p-1.5 bg-[#12346B] text-[#FFFFFF] hover:text-rose-400 border border-[#A7B0C2]/30 transition-colors cursor-pointer"
                       title="Exportar PDF"
                     >
                       <FileText className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => generateInspectionExcel(insp)}
-                      className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-emerald-400 hover:bg-emerald-950/40 transition-colors"
+                      className="p-1.5 bg-[#12346B] text-[#FFFFFF] hover:text-emerald-400 border border-[#A7B0C2]/30 transition-colors cursor-pointer"
                       title="Exportar Excel"
                     >
                       <Table className="w-4 h-4" />
@@ -123,7 +121,7 @@ export const RecordTable: React.FC<RecordTableProps> = ({
                           onDelete(insp.id);
                         }
                       }}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                      className="p-1.5 text-[#A7B0C2] hover:text-rose-400 hover:bg-[#12346B] transition-colors cursor-pointer"
                       title="Excluir"
                     >
                       <Trash2 className="w-4 h-4" />

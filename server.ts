@@ -75,6 +75,15 @@ function initializeDatabase(): DatabaseSchema {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
       const parsed = JSON.parse(content);
       if (parsed && Array.isArray(parsed.inspections)) {
+        // Filter out any mock/seed inspections
+        parsed.inspections = parsed.inspections.filter(
+          (insp: any) =>
+            insp.id !== 'REG-2026-SE01-A1' &&
+            insp.id !== 'REG-2026-SE02-B2' &&
+            insp.uuid !== 'seed-uuid-1' &&
+            insp.uuid !== 'seed-uuid-2'
+        );
+        fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
         return parsed;
       }
     }
@@ -82,60 +91,9 @@ function initializeDatabase(): DatabaseSchema {
     console.error('Error reading database file:', err);
   }
 
-  // Initial seed data
+  // Clean empty state ready for production use
   const initialDb: DatabaseSchema = {
-    inspections: [
-      {
-        id: 'INS-2026-000152',
-        uuid: 'seed-uuid-1',
-        status: 'concluida',
-        dataCriacao: '25/08/2026 14:15',
-        dataEnvio: '25/08/2026 15:47',
-        obra: 'Subestação Norte',
-        equipe: 'EBP01',
-        tecnicoResponsavel: 'João Silva',
-        local: 'Sala Elétrica 03 - Painéis MT/BT',
-        tipoInspecao: 'Inspeção Pós-Serviço',
-        responsavel: 'João Silva',
-        matricula: 'TEC-9842',
-        observacaoGeral: 'Inspeção pós-manutenção concluída. Todos os circuitos restabelecidos e torqueamento de barramentos verificado conforme norma técnica.',
-        localizacao: {
-          latitude: -23.55052,
-          longitude: -46.633308,
-          precisao: 8,
-          dataCaptura: '25/08/2026 às 14:20',
-          endereco: 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP',
-        },
-        fotos: [],
-        sincronizado: true,
-        versaoApp: '2.0.0',
-      },
-      {
-        id: 'INS-2026-000151',
-        uuid: 'seed-uuid-2',
-        status: 'concluida',
-        dataCriacao: '25/08/2026 09:30',
-        dataEnvio: '25/08/2026 10:12',
-        obra: 'Rede Urbana Setor Leste',
-        equipe: 'EQUIPE-ALFA',
-        tecnicoResponsavel: 'Mariana Costa',
-        local: 'Poste P-44 / Av. Central',
-        tipoInspecao: 'Inspeção de Luminárias',
-        responsavel: 'Mariana Costa',
-        matricula: 'ENG-3310',
-        observacaoGeral: 'Substituição de luminárias por modelo LED de alta eficiência. Teste de acendimento realizado com sucesso.',
-        localizacao: {
-          latitude: -22.906847,
-          longitude: -43.172896,
-          precisao: 12,
-          dataCaptura: '25/08/2026 às 09:35',
-          endereco: 'Rua Primeiro de Março, Centro, Rio de Janeiro - RJ',
-        },
-        fotos: [],
-        sincronizado: true,
-        versaoApp: '2.0.0',
-      },
-    ],
+    inspections: [],
     inspectionTypes: DEFAULT_INSPECTION_TYPES,
     lastUpdated: new Date().toISOString(),
   };

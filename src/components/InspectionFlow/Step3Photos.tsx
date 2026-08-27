@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Camera, Image as ImageIcon, Plus, Trash2, ArrowLeft, ArrowRight, AlertTriangle, Eye, Sparkles, Check, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Camera, Image as ImageIcon, Trash2, Eye, ArrowLeft, ArrowRight, Sparkles, AlertTriangle, X } from 'lucide-react';
 import { InspectionPhoto } from '../../types/inspection';
 import { processInspectionImage } from '../../utils/imageProcessor';
 import { PhotoLightbox } from '../PhotoLightbox';
@@ -28,19 +28,19 @@ export const Step3Photos: React.FC<Step3Props> = ({
 
   const MAX_PHOTOS = 15;
 
-  const handleFiles = async (files: FileList | null) => {
+  const handleFilesSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setErrorMessage(null);
 
     const remainingSlots = MAX_PHOTOS - fotos.length;
     if (remainingSlots <= 0) {
-      setErrorMessage('Limite atingido. Esta inspeção permite no máximo 15 fotografias.');
+      setErrorMessage('Limite de 15 fotografias atingido para esta inspeção.');
       return;
     }
 
     const filesToProcess = Array.from(files).slice(0, remainingSlots);
     if (files.length > remainingSlots) {
-      setErrorMessage(`Apenas ${remainingSlots} foto(s) foram adicionadas para não exceder o limite de 15.`);
+      setErrorMessage(`Apenas ${remainingSlots} foto(s) foram adicionadas para respeitar o limite máximo de 15.`);
     }
 
     setIsProcessing(true);
@@ -52,7 +52,6 @@ export const Step3Photos: React.FC<Step3Props> = ({
 
       try {
         const result = await processInspectionImage(file, 1920, 0.82);
-        
         const photoItem: InspectionPhoto = {
           id: `photo-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
           numero: newPhotos.length + 1,
@@ -64,20 +63,22 @@ export const Step3Photos: React.FC<Step3Props> = ({
           tamanhoKb: result.sizeKb,
           nomeArquivo: result.originalName,
         };
-
         newPhotos.push(photoItem);
       } catch (err: any) {
-        setErrorMessage(err.message || 'Falha ao processar a fotografia.');
+        console.error('Error processing image:', err);
+        setErrorMessage(err.message || 'Falha ao processar a fotografia selecionada.');
       }
     }
 
-    // Re-index all photos
-    const reindexed = newPhotos.map((p, idx) => ({ ...p, numero: idx + 1 }));
+    const reindexed = newPhotos.map((p, index) => ({
+      ...p,
+      numero: index + 1,
+    }));
+
     onChange(reindexed);
     setIsProcessing(false);
     setProcessingProgress('');
 
-    // Reset inputs
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (cameraInputRef.current) cameraInputRef.current.value = '';
   };
@@ -91,21 +92,21 @@ export const Step3Photos: React.FC<Step3Props> = ({
     if (!photoToDelete) return;
     const updated = fotos
       .filter((p) => p.id !== photoToDelete.id)
-      .map((p, idx) => ({ ...p, numero: idx + 1 }));
+      .map((p, index) => ({ ...p, numero: index + 1 }));
     onChange(updated);
     setPhotoToDelete(null);
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Hidden file inputs for Camera vs Gallery */}
+    <div className="max-w-2xl mx-auto space-y-6">
+      {/* Hidden file inputs */}
       <input
         ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
         className="hidden"
-        onChange={(e) => handleFiles(e.target.files)}
+        onChange={(e) => handleFilesSelected(e.target.files)}
       />
       <input
         ref={fileInputRef}
@@ -113,52 +114,43 @@ export const Step3Photos: React.FC<Step3Props> = ({
         accept="image/jpeg,image/png,image/webp,image/heic"
         multiple
         className="hidden"
-        onChange={(e) => handleFiles(e.target.files)}
+        onChange={(e) => handleFilesSelected(e.target.files)}
       />
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
-        {/* Header and Photo Counter */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+      <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-5 sm:p-6 shadow-xl space-y-5">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#12346B] pb-4">
           <div>
-            <div className="flex items-center gap-2.5 text-sky-400 font-bold text-xs uppercase tracking-wider mb-1">
+            <div className="flex items-center gap-2.5 text-[#FFFFFF] font-bold text-xs uppercase tracking-wider mb-1">
               <Camera className="w-4 h-4" />
               <span>ETAPA 3</span>
             </div>
-            <h2 className="text-xl font-extrabold text-slate-100">
+            <h2 className="text-xl font-extrabold text-[#FFFFFF]">
               REGISTRO FOTOGRÁFICO
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Documente os pontos inspecionados com fotos claras e legendas detalhadas.
+            <p className="text-xs text-[#A7B0C2] mt-0.5">
+              Anexe fotos com câmera ou galeria (máximo 15 fotos).
             </p>
           </div>
 
-          {/* Photo Counter Pill */}
-          <div className="flex items-center gap-2 self-start sm:self-auto bg-slate-800 px-3.5 py-1.5 rounded-full border border-slate-700">
-            <span className="text-xs text-slate-400">Fotos adicionadas:</span>
-            <span
-              className={`text-sm font-bold ${
-                fotos.length === MAX_PHOTOS
-                  ? 'text-amber-400'
-                  : fotos.length > 0
-                  ? 'text-sky-400'
-                  : 'text-slate-300'
-              }`}
-            >
+          <div className="flex items-center gap-2 bg-[#0F1726] px-3.5 py-1.5 rounded-none border border-[#12346B] self-start sm:self-auto">
+            <span className="text-xs text-[#A7B0C2]">Total:</span>
+            <span className="text-sm font-bold text-[#FFFFFF]">
               {fotos.length}/{MAX_PHOTOS}
             </span>
           </div>
         </div>
 
-        {/* Error / Alert banner */}
+        {/* Error banner */}
         {errorMessage && (
-          <div className="bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-xl p-3.5 flex items-start gap-2.5">
+          <div className="bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-none p-3.5 flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold">{errorMessage}</p>
             </div>
             <button
               onClick={() => setErrorMessage(null)}
-              className="text-rose-400 hover:text-rose-200"
+              className="text-rose-400 hover:text-rose-200 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -167,12 +159,12 @@ export const Step3Photos: React.FC<Step3Props> = ({
 
         {/* Processing Indicator */}
         {isProcessing && (
-          <div className="bg-sky-950/70 border border-sky-800 rounded-xl p-4 text-center space-y-2">
-            <div className="flex items-center justify-center gap-2 text-sky-400 font-semibold text-xs">
-              <Sparkles className="w-4 h-4 animate-spin" />
+          <div className="bg-[#0F1726] border border-[#12346B] rounded-none p-4 text-center space-y-2">
+            <div className="flex items-center justify-center gap-2 text-[#FFFFFF] font-semibold text-xs">
+              <Sparkles className="w-4 h-4 animate-spin text-[#FFFFFF]" />
               <span>{processingProgress || 'Comprimindo e corrigindo orientações de imagem...'}</span>
             </div>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-[#A7B0C2]">
               Redimensionamento automático para 1920×1080px (82% JPEG).
             </p>
           </div>
@@ -181,47 +173,45 @@ export const Step3Photos: React.FC<Step3Props> = ({
         {/* Add Photo Action Buttons */}
         {fotos.length < MAX_PHOTOS && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            {/* Tirar Foto (Camera) */}
             <button
               type="button"
               disabled={isProcessing}
               onClick={() => cameraInputRef.current?.click()}
-              className="py-4 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-sky-950/60 transition-all active:scale-98 touch-manipulation cursor-pointer"
+              className="py-4 px-4 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] font-bold text-sm flex items-center justify-center gap-2.5 shadow-md transition-all active:scale-98 cursor-pointer border border-[#A7B0C2]/30"
             >
-              <Camera className="w-5 h-5" />
-              <span>TIRAR FOTO (CÂMERA)</span>
+              <Camera className="w-5 h-5 text-[#FFFFFF]" />
+              <span>FOTO</span>
             </button>
 
-            {/* Escolher da Galeria */}
             <button
               type="button"
               disabled={isProcessing}
               onClick={() => fileInputRef.current?.click()}
-              className="py-4 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all active:scale-98 touch-manipulation cursor-pointer"
+              className="py-4 px-4 rounded-none bg-[#0F1726] hover:bg-[#12346B] border border-[#A7B0C2]/30 text-[#FFFFFF] font-bold text-sm flex items-center justify-center gap-2.5 transition-all active:scale-98 cursor-pointer"
             >
-              <ImageIcon className="w-5 h-5 text-sky-400" />
-              <span>ESCOLHER DA GALERIA</span>
+              <ImageIcon className="w-5 h-5 text-[#FFFFFF]" />
+              <span>GALERIA</span>
             </button>
           </div>
         )}
 
         {/* Maximum Photos reached badge */}
         {fotos.length >= MAX_PHOTOS && (
-          <div className="bg-amber-950/40 border border-amber-800/80 rounded-xl p-3.5 text-center text-xs text-amber-300">
+          <div className="bg-[#0F1726] border border-[#12346B] rounded-none p-3.5 text-center text-xs text-[#FFFFFF]">
             Limite máximo de 15 fotografias atingido para esta inspeção.
           </div>
         )}
 
-        {/* Photos List / Cards */}
+        {/* Photos List */}
         {fotos.length === 0 ? (
-          <div className="border-2 border-dashed border-slate-800 rounded-2xl p-8 text-center space-y-2">
-            <div className="w-12 h-12 rounded-full bg-slate-800 text-slate-500 mx-auto flex items-center justify-center">
+          <div className="border-2 border-dashed border-[#12346B] rounded-none p-8 text-center space-y-2">
+            <div className="w-12 h-12 rounded-none bg-[#0F1726] border border-[#12346B] text-[#A7B0C2] mx-auto flex items-center justify-center">
               <Camera className="w-6 h-6" />
             </div>
-            <p className="text-sm font-semibold text-slate-300">
+            <p className="text-sm font-semibold text-[#FFFFFF]">
               Nenhuma fotografia adicionada ainda
             </p>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+            <p className="text-xs text-[#A7B0C2] max-w-sm mx-auto">
               Utilize os botões acima para fotografar o local ou anexar imagens da galeria (máx. 15 fotos).
             </p>
           </div>
@@ -230,36 +220,32 @@ export const Step3Photos: React.FC<Step3Props> = ({
             {fotos.map((foto, index) => (
               <div
                 key={foto.id}
-                className="bg-slate-800/90 border border-slate-700/80 rounded-xl p-4 shadow-sm hover:border-slate-600 transition-all space-y-3"
+                className="bg-[#0F1726] border border-[#12346B] rounded-none p-4 shadow-sm space-y-3"
               >
-                {/* Photo Header */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-md bg-sky-600/30 border border-sky-500/40 text-sky-300 font-bold text-xs">
+                    <span className="px-2.5 py-0.5 rounded-none bg-[#0A1D3D] border border-[#12346B] text-[#FFFFFF] font-bold text-xs">
                       Foto {String(foto.numero).padStart(2, '0')} de {String(fotos.length).padStart(2, '0')}
                     </span>
-                    <span className="text-[11px] text-slate-400">
+                    <span className="text-[11px] text-[#A7B0C2]">
                       {foto.dataUpload} {foto.tamanhoKb ? `• ${foto.tamanhoKb} KB` : ''}
                     </span>
                   </div>
 
-                  {/* Delete Button */}
                   <button
                     type="button"
                     onClick={() => setPhotoToDelete(foto)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                    className="p-1.5 rounded-none text-[#A7B0C2] hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
                     title="Excluir fotografia"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
 
-                {/* Photo and Caption Flex container */}
                 <div className="flex flex-col sm:flex-row gap-3.5">
-                  {/* Photo thumbnail */}
                   <div
                     onClick={() => setLightboxIndex(index)}
-                    className="relative w-full sm:w-44 h-40 bg-slate-950 rounded-lg overflow-hidden shrink-0 cursor-pointer group border border-slate-700/60"
+                    className="relative w-full sm:w-44 h-40 bg-[#0A1D3D] rounded-none overflow-hidden shrink-0 cursor-pointer group border border-[#12346B]"
                   >
                     <img
                       src={foto.dataUrl}
@@ -271,10 +257,9 @@ export const Step3Photos: React.FC<Step3Props> = ({
                     </div>
                   </div>
 
-                  {/* Caption Input Field */}
                   <div className="flex-1 flex flex-col justify-between space-y-2">
                     <div className="space-y-1">
-                      <label className="block text-xs font-bold text-slate-300">
+                      <label className="block text-xs font-bold text-[#FFFFFF]">
                         Observação / Legenda Individual:
                       </label>
                       <textarea
@@ -282,16 +267,16 @@ export const Step3Photos: React.FC<Step3Props> = ({
                         value={foto.legenda}
                         onChange={(e) => handleUpdateLegenda(foto.id, e.target.value)}
                         placeholder="Ex: Luminária instalada fora do alinhamento previsto..."
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 resize-none transition-colors"
+                        className="w-full bg-[#0A1D3D] border border-[#12346B] rounded-none p-2.5 text-xs text-[#FFFFFF] placeholder-[#A7B0C2]/50 focus:outline-none focus:ring-1 focus:ring-[#FFFFFF] resize-none"
                       />
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center justify-between text-[11px] text-[#A7B0C2]">
                       <span>{foto.legenda ? `${foto.legenda.length} caracteres` : 'Sem legenda'}</span>
                       <button
                         type="button"
                         onClick={() => setLightboxIndex(index)}
-                        className="text-sky-400 hover:text-sky-300 font-semibold flex items-center gap-1"
+                        className="text-[#FFFFFF] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Ver ampliada</span>
@@ -307,26 +292,26 @@ export const Step3Photos: React.FC<Step3Props> = ({
 
       {/* Delete Confirmation Modal */}
       {photoToDelete && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl">
-            <h3 className="text-base font-bold text-slate-100 mb-2">
+        <div className="fixed inset-0 z-50 bg-[#0F1726]/80 flex items-center justify-center p-4">
+          <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-5 max-w-sm w-full shadow-2xl">
+            <h3 className="text-base font-bold text-[#FFFFFF] mb-2">
               Excluir Foto {String(photoToDelete.numero).padStart(2, '0')}?
             </h3>
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-              Esta ação removerá a imagem e sua legenda desta inspeção. As fotos restantes serão renumeradas automaticamente.
+            <p className="text-xs text-[#A7B0C2] mb-4 leading-relaxed">
+              Esta ação removerá a imagem e sua legenda desta inspeção.
             </p>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setPhotoToDelete(null)}
-                className="flex-1 py-2.5 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl hover:bg-slate-700"
+                className="flex-1 py-2.5 bg-[#12346B] text-[#FFFFFF] text-xs font-semibold rounded-none border border-[#A7B0C2]/30 cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleConfirmDelete}
-                className="flex-1 py-2.5 bg-rose-600 text-white text-xs font-bold rounded-xl hover:bg-rose-500"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-none cursor-pointer"
               >
                 Confirmar Exclusão
               </button>
@@ -349,7 +334,7 @@ export const Step3Photos: React.FC<Step3Props> = ({
         <button
           type="button"
           onClick={onPrev}
-          className="py-3 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+          className="py-3 px-5 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] text-sm font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#A7B0C2]/30"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Voltar</span>
@@ -358,7 +343,7 @@ export const Step3Photos: React.FC<Step3Props> = ({
         <button
           type="button"
           onClick={onNext}
-          className="py-3.5 px-6 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-sky-950 transition-all active:scale-98 cursor-pointer"
+          className="py-3.5 px-6 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 cursor-pointer border border-[#A7B0C2]/30"
         >
           <span>PRÓXIMA ETAPA: RESPONSÁVEL</span>
           <ArrowRight className="w-4 h-4" />

@@ -67,7 +67,7 @@ export async function generateInspectionExcel(inspection: Inspection): Promise<v
   };
 
   addSectionHeader('1. IDENTIFICAÇÃO E DADOS GERAIS');
-  addDataRow('Número da Inspeção (ID)', inspection.id);
+  addDataRow('Protocolo / Registro', inspection.id);
   addDataRow('Data de Criação', inspection.dataCriacao);
   addDataRow('Data de Finalização / Envio', inspection.dataEnvio || '-');
   addDataRow('Status', inspection.status.toUpperCase());

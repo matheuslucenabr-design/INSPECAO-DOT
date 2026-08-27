@@ -51,16 +51,16 @@ export const Step5Location: React.FC<Step5Props> = ({
 
   return (
     <div className="max-w-xl mx-auto space-y-6">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
-        <div className="border-b border-slate-800 pb-4">
-          <div className="flex items-center gap-2.5 text-sky-400 font-bold text-xs uppercase tracking-wider mb-1">
+      <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-5 sm:p-6 shadow-xl space-y-5">
+        <div className="border-b border-[#12346B] pb-4">
+          <div className="flex items-center gap-2.5 text-[#FFFFFF] font-bold text-xs uppercase tracking-wider mb-1">
             <MapPin className="w-4 h-4" />
             <span>ETAPA 5</span>
           </div>
-          <h2 className="text-xl font-extrabold text-slate-100">
+          <h2 className="text-xl font-extrabold text-[#FFFFFF]">
             LOCALIZAÇÃO DA INSPEÇÃO (GPS)
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-[#A7B0C2] mt-1">
             Registre as coordenadas geográficas exatas do ponto inspecionado.
           </p>
         </div>
@@ -71,21 +71,21 @@ export const Step5Location: React.FC<Step5Props> = ({
             type="button"
             disabled={isCapturing}
             onClick={handleCaptureLocation}
-            className="w-full py-4 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-sky-950/60 transition-all active:scale-98 cursor-pointer"
+            className="w-full py-4 px-4 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] font-bold text-sm flex items-center justify-center gap-2.5 shadow-md transition-all active:scale-98 cursor-pointer border border-[#A7B0C2]/30"
           >
             {isCapturing ? (
               <>
-                <RefreshCw className="w-5 h-5 animate-spin" />
+                <RefreshCw className="w-5 h-5 animate-spin text-[#FFFFFF]" />
                 <span>OBTENDO COORDENADAS GPS...</span>
               </>
             ) : hasValidGps ? (
               <>
-                <RefreshCw className="w-5 h-5" />
+                <RefreshCw className="w-5 h-5 text-[#FFFFFF]" />
                 <span>ATUALIZAR LOCALIZAÇÃO GPS</span>
               </>
             ) : (
               <>
-                <Navigation className="w-5 h-5" />
+                <Navigation className="w-5 h-5 text-[#FFFFFF]" />
                 <span>REGISTRAR LOCALIZAÇÃO GPS</span>
               </>
             )}
@@ -94,7 +94,7 @@ export const Step5Location: React.FC<Step5Props> = ({
 
         {/* Error State Banner with Skip Action */}
         {errorMsg && (
-          <div className="bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-xl p-4 space-y-3">
+          <div className="bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-none p-4 space-y-3">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div>
@@ -112,14 +112,14 @@ export const Step5Location: React.FC<Step5Props> = ({
               <button
                 type="button"
                 onClick={handleCaptureLocation}
-                className="py-2 px-3 bg-rose-700 hover:bg-rose-600 text-white font-bold rounded-lg text-xs"
+                className="py-2 px-3 bg-rose-700 hover:bg-rose-600 text-white font-bold rounded-none text-xs cursor-pointer"
               >
                 Tentar novamente
               </button>
               <button
                 type="button"
                 onClick={handleSkipLocation}
-                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg text-xs border border-slate-700"
+                className="py-2 px-3 bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] font-semibold rounded-none text-xs border border-[#A7B0C2]/30 cursor-pointer"
               >
                 Continuar sem localização
               </button>
@@ -129,32 +129,32 @@ export const Step5Location: React.FC<Step5Props> = ({
 
         {/* Successful GPS Display */}
         {hasValidGps && (
-          <div className="bg-emerald-950/40 border border-emerald-800/70 rounded-xl p-4 space-y-3">
+          <div className="bg-[#0F1726] border border-[#12346B] rounded-none p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+              <div className="flex items-center gap-2 text-[#FFFFFF] font-bold text-xs">
                 <CheckCircle className="w-4 h-4" />
                 <span>Localização registrada com sucesso</span>
               </div>
-              <span className="text-[11px] text-slate-400">
-                Precisão: <strong className="text-emerald-400">±{localizacao.precisao}m</strong>
+              <span className="text-[11px] text-[#A7B0C2]">
+                Precisão: <strong className="text-[#FFFFFF]">±{localizacao.precisao}m</strong>
               </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-              <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                <span className="text-slate-400 block text-[10px] uppercase">Latitude</span>
-                <span className="font-mono font-bold text-slate-100">{localizacao.latitude.toFixed(6)}°</span>
+              <div className="bg-[#0A1D3D] p-2.5 rounded-none border border-[#12346B]">
+                <span className="text-[#A7B0C2] block text-[10px] uppercase font-semibold">Latitude</span>
+                <span className="font-mono font-bold text-[#FFFFFF]">{localizacao.latitude.toFixed(6)}°</span>
               </div>
-              <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                <span className="text-slate-400 block text-[10px] uppercase">Longitude</span>
-                <span className="font-mono font-bold text-slate-100">{localizacao.longitude.toFixed(6)}°</span>
+              <div className="bg-[#0A1D3D] p-2.5 rounded-none border border-[#12346B]">
+                <span className="text-[#A7B0C2] block text-[10px] uppercase font-semibold">Longitude</span>
+                <span className="font-mono font-bold text-[#FFFFFF]">{localizacao.longitude.toFixed(6)}°</span>
               </div>
             </div>
 
             {localizacao.endereco && (
-              <div className="text-xs bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                <span className="text-slate-400 block text-[10px] uppercase">Endereço Identificado</span>
-                <p className="text-slate-200 mt-0.5 leading-relaxed">{localizacao.endereco}</p>
+              <div className="text-xs bg-[#0A1D3D] p-2.5 rounded-none border border-[#12346B]">
+                <span className="text-[#A7B0C2] block text-[10px] uppercase font-semibold">Endereço Identificado</span>
+                <p className="text-[#FFFFFF] mt-0.5 leading-relaxed">{localizacao.endereco}</p>
               </div>
             )}
 
@@ -162,7 +162,7 @@ export const Step5Location: React.FC<Step5Props> = ({
               <button
                 type="button"
                 onClick={() => setShowMapEmbed(!showMapEmbed)}
-                className="text-xs text-sky-400 hover:text-sky-300 font-semibold flex items-center gap-1.5"
+                className="text-xs text-[#FFFFFF] hover:underline font-semibold flex items-center gap-1.5 cursor-pointer"
               >
                 <Eye className="w-3.5 h-3.5" />
                 <span>{showMapEmbed ? 'Ocultar mapa interativo' : 'Ver mapa aqui'}</span>
@@ -172,7 +172,7 @@ export const Step5Location: React.FC<Step5Props> = ({
                 href={getMapsUrl(localizacao.latitude, localizacao.longitude)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-slate-400 hover:text-slate-200 font-semibold flex items-center gap-1"
+                className="text-xs text-[#A7B0C2] hover:text-[#FFFFFF] font-semibold flex items-center gap-1"
               >
                 <span>Google Maps</span>
                 <ExternalLink className="w-3 h-3" />
@@ -181,7 +181,7 @@ export const Step5Location: React.FC<Step5Props> = ({
 
             {/* Embedded interactive map */}
             {showMapEmbed && (
-              <div className="mt-2 h-48 w-full rounded-lg overflow-hidden border border-slate-700">
+              <div className="mt-2 h-48 w-full rounded-none overflow-hidden border border-[#12346B]">
                 <iframe
                   title="Localização da Inspeção"
                   width="100%"
@@ -197,11 +197,11 @@ export const Step5Location: React.FC<Step5Props> = ({
 
         {/* Skipped GPS Status Notice */}
         {localizacao?.semGps && (
-          <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-3.5 flex items-center gap-3 text-xs text-amber-300">
-            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="bg-[#0F1726] border border-[#12346B] rounded-none p-3.5 flex items-center gap-3 text-xs text-[#FFFFFF]">
+            <ShieldAlert className="w-5 h-5 text-[#FFFFFF] shrink-0" />
             <div>
               <p className="font-bold">Inspeção sem registro de GPS</p>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-[#A7B0C2]">
                 O registro será gravado com marcação de ausência de sinal georreferenciado.
               </p>
             </div>
@@ -214,7 +214,7 @@ export const Step5Location: React.FC<Step5Props> = ({
             <button
               type="button"
               onClick={handleSkipLocation}
-              className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-4 font-medium"
+              className="text-xs text-[#A7B0C2] hover:text-[#FFFFFF] underline underline-offset-4 font-medium cursor-pointer"
             >
               Continuar sem registrar localização GPS
             </button>
@@ -227,7 +227,7 @@ export const Step5Location: React.FC<Step5Props> = ({
         <button
           type="button"
           onClick={onPrev}
-          className="py-3 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+          className="py-3 px-5 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] text-sm font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#A7B0C2]/30"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Voltar</span>
@@ -236,7 +236,7 @@ export const Step5Location: React.FC<Step5Props> = ({
         <button
           type="button"
           onClick={onNext}
-          className="py-3.5 px-6 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-sky-950 transition-all active:scale-98 cursor-pointer"
+          className="py-3.5 px-6 rounded-none bg-[#12346B] hover:bg-[#12346B]/80 text-[#FFFFFF] font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-98 cursor-pointer border border-[#A7B0C2]/30"
         >
           <span>PRÓXIMA ETAPA: REVISÃO</span>
           <ArrowRight className="w-4 h-4" />
