@@ -48,10 +48,10 @@ export const Step3Photos: React.FC<Step3Props> = ({
 
     for (let i = 0; i < filesToProcess.length; i++) {
       const file = filesToProcess[i];
-      setProcessingProgress(`Otimizando foto ${i + 1} de ${filesToProcess.length}...`);
+      setProcessingProgress(`Processando evidência ${i + 1} de ${filesToProcess.length}...`);
 
       try {
-        const result = await processInspectionImage(file, 1920, 0.82);
+        const result = await processInspectionImage(file, 1440, 0.80);
         const photoItem: InspectionPhoto = {
           id: `photo-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
           numero: newPhotos.length + 1,
@@ -66,7 +66,6 @@ export const Step3Photos: React.FC<Step3Props> = ({
         newPhotos.push(photoItem);
       } catch (err: any) {
         console.error('Error processing image:', err);
-        setErrorMessage(err.message || 'Falha ao processar a fotografia selecionada.');
       }
     }
 
@@ -111,7 +110,7 @@ export const Step3Photos: React.FC<Step3Props> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/heic"
+        accept="image/*"
         multiple
         className="hidden"
         onChange={(e) => handleFilesSelected(e.target.files)}

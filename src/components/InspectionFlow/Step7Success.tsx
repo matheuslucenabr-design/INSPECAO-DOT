@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { CheckCircle2, FileText, Table, PlusCircle, Eye } from 'lucide-react';
+import { CheckCircle2, FileText, Table, PlusCircle, Eye, FolderArchive } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Inspection } from '../../types/inspection';
 import { generateInspectionPdf } from '../../utils/exportPdf';
@@ -9,12 +9,14 @@ interface Step7Props {
   inspection: Inspection;
   onNewInspection: () => void;
   onViewInspection: (inspection: Inspection) => void;
+  onGoToRecords?: () => void;
 }
 
 export const Step7Success: React.FC<Step7Props> = ({
   inspection,
   onNewInspection,
   onViewInspection,
+  onGoToRecords,
 }) => {
   useEffect(() => {
     // Fire confetti celebration on complete
@@ -113,8 +115,18 @@ export const Step7Success: React.FC<Step7Props> = ({
             className="flex-1 py-2.5 sm:py-3.5 px-3 rounded-none bg-[#0F1726] hover:bg-[#12346B] text-[#FFFFFF] font-bold text-xs flex items-center justify-center gap-1.5 border border-[#A7B0C2]/30 transition-colors cursor-pointer"
           >
             <Eye className="w-3.5 h-3.5 text-[#FFFFFF]" />
-            <span>VER INSPEÇÃO</span>
+            <span>VER DETALHES</span>
           </button>
+
+          {onGoToRecords && (
+            <button
+              onClick={onGoToRecords}
+              className="flex-1 py-2.5 sm:py-3.5 px-3 rounded-none bg-[#0F1726] hover:bg-[#12346B] text-[#FFFFFF] font-bold text-xs flex items-center justify-center gap-1.5 border border-[#A7B0C2]/30 transition-colors cursor-pointer"
+            >
+              <FolderArchive className="w-3.5 h-3.5 text-[#FFFFFF]" />
+              <span>VER REGISTROS</span>
+            </button>
+          )}
 
           <button
             onClick={onNewInspection}

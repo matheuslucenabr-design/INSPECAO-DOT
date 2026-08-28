@@ -39,6 +39,10 @@ export const DEFAULT_SITES = [
   'Galpão Logístico Eixo Sul',
 ];
 
+// In-memory runtime cache for instant access
+let inMemoryInspections: Inspection[] = [];
+let isIndexedDbInitialized = false;
+
 /**
  * Guaranteed globally unique inspection registration identifier
  * Generates unique non-colliding IDs (timestamp + random entropy)
@@ -80,6 +84,65 @@ function openLocalDatabase(): Promise<IDBDatabase> {
   });
 }
 
+/**
+ * Load all inspections from IndexedDB
+ */
+export async function loadAllFromIndexedDB(): Promise<Inspection[]> {
+  try {
+    const localDb = await openLocalDatabase();
+    return new Promise((resolve) => {
+      const tx = localDb.transaction([STORE_INSPECTIONS], 'readonly');
+      const store = tx.objectStore(STORE_INSPECTIONS);
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        const results = request.result;
+        if (Array.isArray(results)) {
+          const cleaned = results.filter((item) => !isSeedInspection(item));
+          resolve(cleaned);
+        } else {
+          resolve([]);
+        }
+      };
+
+      request.onerror = () => {
+        resolve([]);
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save single inspection directly to IndexedDB
+ */
+export async function saveToIndexedDB(item: Inspection): Promise<void> {
+  try {
+    if (isSeedInspection(item)) return;
+    const localDb = await openLocalDatabase();
+    const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
+    const store = tx.objectStore(STORE_INSPECTIONS);
+    store.put(item);
+  } catch (err) {
+    console.debug('Erro ao persistir no IndexedDB:', err);
+  }
+}
+
+/**
+ * Delete inspection from IndexedDB
+ */
+export async function deleteFromIndexedDB(idOrUuid: string): Promise<void> {
+  try {
+    const localDb = await openLocalDatabase();
+    const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
+    const store = tx.objectStore(STORE_INSPECTIONS);
+    store.delete(idOrUuid);
+  } catch (err) {
+    console.debug('Erro ao deletar no IndexedDB:', err);
+  }
+}
+
 // ---------------- LOCALSTORAGE & INDEXEDDB CACHE ---------------- //
 
 /**
@@ -97,53 +160,6 @@ function isSeedInspection(item: any): boolean {
     id.startsWith('seed-')
   );
 }
-
-/**
- * Get cached inspections instantly (synchronous) - starts 100% clean with empty list
- */
-export function getStoredInspections(): Inspection[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_FALLBACK_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    // Filter out any leftover seed records from previous sessions
-    const cleaned = parsed.filter((item) => !isSeedInspection(item));
-    if (cleaned.length !== parsed.length) {
-      saveAllInspections(cleaned, false);
-    }
-    return cleaned;
-  } catch (err) {
-    console.error('Erro ao ler cache local:', err);
-    return [];
-  }
-}
-
-/**
- * Save all inspections to local cache and IndexedDB
- */
-export function saveAllInspections(inspections: Inspection[], pushToServer: boolean = true): void {
-  try {
-    const sanitized = inspections.filter((item) => !isSeedInspection(item));
-    localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(sanitized));
-
-    // Mirror to IndexedDB
-    openLocalDatabase().then((localDb) => {
-      const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
-      const store = tx.objectStore(STORE_INSPECTIONS);
-      store.clear();
-      sanitized.forEach((item) => store.put(item));
-    }).catch((e) => console.debug('IndexedDB mirror sync:', e));
-  } catch (err) {
-    console.error('Erro ao salvar no armazenamento local:', err);
-  }
-}
-
-// ---------------- FIREBASE FIRESTORE INTEGRATION ---------------- //
 
 /**
  * Helper to sort inspections chronologically (newest first)
@@ -164,6 +180,115 @@ export function sortInspectionsDescending(items: Inspection[]): Inspection[] {
 }
 
 /**
+ * Merge multiple lists of inspections non-destructively.
+ * Ensures every submitted inspection is permanently preserved.
+ */
+export function mergeInspections(...sources: (Inspection[] | null | undefined)[]): Inspection[] {
+  const map = new Map<string, Inspection>();
+
+  for (const list of sources) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item || isSeedInspection(item)) continue;
+      const key = item.id || item.uuid;
+      if (!key) continue;
+
+      if (!map.has(key)) {
+        map.set(key, item);
+      } else {
+        const existing = map.get(key)!;
+        // Keep the one with most recent updated timestamp or the one with photos if other is missing
+        const existingTime = existing.updatedAt || existing.dataEnvio || existing.dataCriacao || '';
+        const incomingTime = item.updatedAt || item.dataEnvio || item.dataCriacao || '';
+        
+        const existingPhotosCount = existing.fotos?.length || 0;
+        const incomingPhotosCount = item.fotos?.length || 0;
+
+        if (incomingPhotosCount > existingPhotosCount || incomingTime >= existingTime) {
+          map.set(key, {
+            ...existing,
+            ...item,
+            fotos: item.fotos && item.fotos.length >= existingPhotosCount ? item.fotos : existing.fotos,
+          });
+        }
+      }
+    }
+  }
+
+  return sortInspectionsDescending(Array.from(map.values()));
+}
+
+/**
+ * Get cached inspections instantly (synchronous) - starts with persistent local data
+ */
+export function getStoredInspections(): Inspection[] {
+  if (inMemoryInspections.length > 0) {
+    return inMemoryInspections;
+  }
+
+  try {
+    const raw = localStorage.getItem(STORAGE_FALLBACK_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((item) => !isSeedInspection(item));
+        inMemoryInspections = sortInspectionsDescending(cleaned);
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao ler cache localStorage:', err);
+  }
+
+  // Trigger background IndexedDB populate if not yet done
+  if (!isIndexedDbInitialized) {
+    isIndexedDbInitialized = true;
+    loadAllFromIndexedDB().then((idbList) => {
+      if (idbList.length > 0) {
+        inMemoryInspections = mergeInspections(inMemoryInspections, idbList);
+      }
+    });
+  }
+
+  return inMemoryInspections;
+}
+
+/**
+ * Save all inspections to local cache and IndexedDB
+ */
+export function saveAllInspections(inspections: Inspection[], pushToServer: boolean = false): void {
+  try {
+    const sanitized = mergeInspections(inspections);
+    inMemoryInspections = sanitized;
+
+    try {
+      localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(sanitized));
+    } catch (quotaErr) {
+      // If localStorage is full, save a stripped metadata version to localStorage
+      // while preserving full items with photos in IndexedDB
+      console.warn('LocalStorage quota excedida, salvando versão compacta no cache de fallback:', quotaErr);
+      try {
+        const compact = sanitized.map((item) => ({
+          ...item,
+          fotos: item.fotos.map((f) => ({ ...f, dataUrl: '' })), // drop base64 in localstorage fallback
+        }));
+        localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(compact));
+      } catch {}
+    }
+
+    // Mirror to IndexedDB (full data with high-res photos)
+    openLocalDatabase().then((localDb) => {
+      const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
+      const store = tx.objectStore(STORE_INSPECTIONS);
+      sanitized.forEach((item) => store.put(item));
+    }).catch((e) => console.debug('IndexedDB mirror sync:', e));
+  } catch (err) {
+    console.error('Erro ao salvar no armazenamento local:', err);
+  }
+}
+
+// ---------------- FIREBASE FIRESTORE INTEGRATION ---------------- //
+
+/**
  * Clean any leftover seed documents from Firestore
  */
 export async function purgeSeedDataFromFirestore(): Promise<void> {
@@ -176,62 +301,75 @@ export async function purgeSeedDataFromFirestore(): Promise<void> {
 }
 
 /**
- * Fetch all inspections directly from Firebase Firestore with backend fallback
+ * Fetch all inspections with robust multi-tier fallback & non-destructive union
  */
 export async function fetchServerInspections(): Promise<Inspection[]> {
   // Purge any seed docs if they exist
   purgeSeedDataFromFirestore().catch(() => {});
 
+  const localStored = getStoredInspections();
+  const idbStored = await loadAllFromIndexedDB();
+  let firestoreItems: Inspection[] = [];
+  let backendItems: Inspection[] = [];
+
+  // 1. Fetch from Firebase Firestore
   try {
     const querySnapshot = await getDocs(collection(db, 'inspections'));
-    const items: Inspection[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data() as Inspection;
       if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docSnap.id })) {
-        items.push({
+        firestoreItems.push({
           ...data,
           id: data.id || docSnap.id,
           uuid: data.uuid || data.id || docSnap.id,
         });
       }
     });
-
-    const sorted = sortInspectionsDescending(items);
-    saveAllInspections(sorted, false);
-    return sorted;
   } catch (firebaseErr) {
     console.warn('Firestore indisponível temporariamente, tentando servidor/cache:', firebaseErr);
-    
-    // Fallback to Express backend if needed
-    try {
-      const response = await fetch('/api/inspections', {
-        headers: { Accept: 'application/json' },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data && Array.isArray(data.inspections)) {
-          const sorted = sortInspectionsDescending(data.inspections);
-          saveAllInspections(sorted, false);
-          return sorted;
-        }
-      }
-    } catch {}
   }
-  return getStoredInspections();
+
+  // 2. Fetch from Express Backend
+  try {
+    const response = await fetch('/api/inspections', {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && Array.isArray(data.inspections)) {
+        backendItems = data.inspections.filter((i: any) => !isSeedInspection(i));
+      }
+    }
+  } catch (serverErr) {
+    console.debug('Backend fetch error:', serverErr);
+  }
+
+  // Non-destructive smart merge of ALL sources
+  const merged = mergeInspections(localStored, idbStored, backendItems, firestoreItems);
+  
+  // Persist merged set locally
+  saveAllInspections(merged, false);
+
+  // Background sync: If any local/backend inspections are missing from Firestore, push them
+  if (firestoreItems.length < merged.length) {
+    const firestoreIds = new Set(firestoreItems.map((i) => i.id));
+    merged.forEach((insp) => {
+      if (!firestoreIds.has(insp.id)) {
+        setDoc(doc(db, 'inspections', insp.id), { ...insp, sincronizado: true }, { merge: true }).catch(() => {});
+      }
+    });
+  }
+
+  return merged;
 }
 
 /**
- * Save single inspection directly into Firebase Firestore & local cache
- * Ensures that each inspection is treated as an independent document that accumulates permanently.
+ * Save single inspection directly into Firebase Firestore, Backend Server, and Local DB.
+ * Guarantees that the inspection is registered across all tiers and immediately accessible.
  */
-export async function saveInspection(inspection: Inspection): Promise<void> {
+export async function saveInspection(inspection: Inspection): Promise<Inspection> {
   const current = getStoredInspections();
   
-  // Find only if exact matching uuid or id exists
-  const existingIndex = current.findIndex(
-    (i) => (inspection.uuid && i.uuid === inspection.uuid) || (inspection.id && i.id === inspection.id)
-  );
-
   const updatedInspection: Inspection = {
     ...inspection,
     id: inspection.id || inspection.uuid || generateUniqueInspectionId(),
@@ -241,41 +379,44 @@ export async function saveInspection(inspection: Inspection): Promise<void> {
     updatedAt: new Date().toISOString(),
   };
 
-  if (existingIndex >= 0) {
-    current[existingIndex] = updatedInspection;
-  } else {
-    current.unshift(updatedInspection);
-  }
+  // 1. Immediately store in Memory, LocalStorage, and IndexedDB
+  const merged = mergeInspections(current, [updatedInspection]);
+  saveAllInspections(merged, false);
+  await saveToIndexedDB(updatedInspection);
 
-  const sortedList = sortInspectionsDescending(current);
-  saveAllInspections(sortedList, false);
-
-  // 1. Direct Firebase Firestore Write (Using unique doc ID)
-  try {
-    const docId = updatedInspection.id;
-    const docRef = doc(db, 'inspections', docId);
-    await setDoc(docRef, updatedInspection, { merge: true });
-  } catch (firestoreErr) {
-    console.warn('Erro ao salvar no Firestore (mantido no cache local):', firestoreErr);
-  }
-
-  // 2. Also notify backend server for SSE/backup synchronization
+  // 2. Persist to Express backend disk database
   try {
     await fetch('/api/inspections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updatedInspection),
     });
-  } catch {}
+  } catch (serverErr) {
+    console.debug('Backend save warning:', serverErr);
+  }
+
+  // 3. Direct Firebase Firestore Write
+  try {
+    const docId = updatedInspection.id;
+    const docRef = doc(db, 'inspections', docId);
+    await setDoc(docRef, updatedInspection, { merge: true });
+  } catch (firestoreErr) {
+    console.warn('Erro ao salvar no Firestore (mantido com segurança no banco local/servidor):', firestoreErr);
+  }
+
+  return updatedInspection;
 }
 
 /**
- * Delete inspection from Firebase Firestore and local cache
+ * Delete inspection from Firebase Firestore, Backend, and local cache
  */
 export async function deleteInspection(idOrUuid: string): Promise<void> {
   const current = getStoredInspections();
   const filtered = current.filter((i) => i.id !== idOrUuid && i.uuid !== idOrUuid);
+  
+  inMemoryInspections = filtered;
   saveAllInspections(filtered, false);
+  await deleteFromIndexedDB(idOrUuid);
 
   // 1. Delete from Firebase Firestore
   try {
@@ -285,7 +426,7 @@ export async function deleteInspection(idOrUuid: string): Promise<void> {
     console.warn('Erro ao deletar no Firestore:', firestoreErr);
   }
 
-  // 2. Also notify backend server
+  // 2. Delete from backend server
   try {
     await fetch(`/api/inspections/${encodeURIComponent(idOrUuid)}`, {
       method: 'DELETE',
@@ -369,8 +510,7 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
 // ---------------- REALTIME MULTI-CLIENT FIREBASE SYNCHRONIZATION ---------------- //
 
 /**
- * Setup Realtime Firebase Firestore listener to automatically receive additions, deletions,
- * and updates from all users and browsers instantly via WebSocket/gRPC streams.
+ * Setup Realtime Firebase Firestore listener & SSE stream with non-destructive merge.
  */
 export function setupRealtimeSync(
   onInspectionsUpdate: (inspections: Inspection[]) => void,
@@ -388,14 +528,19 @@ export function setupRealtimeSync(
         const list: Inspection[] = [];
         snapshot.forEach((d) => {
           const item = d.data() as Inspection;
-          if (item && item.id && !isSeedInspection(item) && !isSeedInspection({ id: d.id })) {
-            list.push(item);
+          if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: d.id })) {
+            list.push({
+              ...item,
+              id: item.id || d.id,
+              uuid: item.uuid || item.id || d.id,
+            });
           }
         });
 
-        const sorted = sortInspectionsDescending(list);
-        saveAllInspections(sorted, false);
-        onInspectionsUpdate(sorted);
+        const current = getStoredInspections();
+        const merged = mergeInspections(current, list);
+        saveAllInspections(merged, false);
+        onInspectionsUpdate(merged);
       },
       (error) => {
         console.warn('Firebase Firestore realtime listener error:', error);
@@ -432,9 +577,10 @@ export function setupRealtimeSync(
         try {
           const data = JSON.parse(event.data);
           if (data && Array.isArray(data.inspections)) {
-            const cleanList = sortInspectionsDescending(data.inspections);
-            saveAllInspections(cleanList, false);
-            onInspectionsUpdate(cleanList);
+            const current = getStoredInspections();
+            const merged = mergeInspections(current, data.inspections);
+            saveAllInspections(merged, false);
+            onInspectionsUpdate(merged);
           }
         } catch {}
       });
@@ -454,18 +600,7 @@ export function setupRealtimeSync(
  * Export full system database backup
  */
 export async function exportDatabaseBackup(): Promise<void> {
-  let inspections = getStoredInspections();
-  try {
-    const snapshot = await getDocs(collection(db, 'inspections'));
-    const firestoreList: Inspection[] = [];
-    snapshot.forEach((d) => {
-      const data = d.data() as Inspection;
-      if (data && !isSeedInspection(data)) {
-        firestoreList.push(data);
-      }
-    });
-    if (firestoreList.length > 0) inspections = firestoreList;
-  } catch {}
+  const inspections = await fetchServerInspections();
 
   const data = {
     appName: 'INSPEÇÃO PRONTO!',
@@ -480,7 +615,7 @@ export async function exportDatabaseBackup(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `backup_inspecoes_firebase_${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `backup_inspecoes_${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -488,7 +623,7 @@ export async function exportDatabaseBackup(): Promise<void> {
 }
 
 /**
- * Import and merge/restore database backup to Firebase Firestore
+ * Import and merge/restore database backup
  */
 export async function importDatabaseBackup(jsonString: string): Promise<{ success: boolean; count: number; error?: string }> {
   try {
@@ -498,14 +633,7 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
     }
 
     const current = getStoredInspections();
-    const map = new Map<string, Inspection>();
-
-    current.forEach((item) => map.set(item.id, item));
-    parsed.inspections.forEach((item: Inspection) => {
-      if (item.id && !isSeedInspection(item)) map.set(item.id, item);
-    });
-
-    const merged = Array.from(map.values()).sort((a, b) => b.id.localeCompare(a.id));
+    const merged = mergeInspections(current, parsed.inspections);
     saveAllInspections(merged, false);
 
     if (parsed.inspectionTypes && Array.isArray(parsed.inspectionTypes)) {

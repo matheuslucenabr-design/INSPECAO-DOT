@@ -270,6 +270,11 @@ export default function App() {
                 inspection={submittedInspection}
                 onNewInspection={handleNewInspection}
                 onViewInspection={(insp) => setViewingInspection(insp)}
+                onGoToRecords={() => {
+                  setSubmittedInspection(null);
+                  setCurrentTab('registros');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
               />
             ) : (
               <SingleInspectionForm
