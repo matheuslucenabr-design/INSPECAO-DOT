@@ -355,12 +355,21 @@ export async function fetchServerInspections(): Promise<Inspection[]> {
     const firestoreIds = new Set(firestoreItems.map((i) => i.id));
     merged.forEach((insp) => {
       if (!firestoreIds.has(insp.id)) {
-        setDoc(doc(db, 'inspections', insp.id), { ...insp, sincronizado: true }, { merge: true }).catch(() => {});
+        const safe = sanitizeForFirestore({ ...insp, sincronizado: true });
+        setDoc(doc(db, 'inspections', insp.id), safe, { merge: true }).catch(() => {});
       }
     });
   }
 
   return merged;
+}
+
+/**
+ * Recursively remove undefined values and sanitize data for Firestore compatibility.
+ * Prevents Firestore from rejecting documents due to undefined fields.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data, (_, value) => (value === undefined ? null : value)));
 }
 
 /**
@@ -379,30 +388,37 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
     updatedAt: new Date().toISOString(),
   };
 
-  // 1. Immediately store in Memory, LocalStorage, and IndexedDB
+  // 1. Immediately store in Memory, LocalStorage, and IndexedDB for instant UI responsiveness
   const merged = mergeInspections(current, [updatedInspection]);
   saveAllInspections(merged, false);
   await saveToIndexedDB(updatedInspection);
 
-  // 2. Persist to Express backend disk database
-  try {
-    await fetch('/api/inspections', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedInspection),
-    });
-  } catch (serverErr) {
-    console.debug('Backend save warning:', serverErr);
-  }
+  // 2. Persist in parallel to Firebase Firestore Cloud and Central Express Backend
+  const safeData = sanitizeForFirestore(updatedInspection);
+  
+  const firestorePromise = (async () => {
+    try {
+      const docId = safeData.id;
+      const docRef = doc(db, 'inspections', docId);
+      await setDoc(docRef, safeData, { merge: true });
+    } catch (firestoreErr) {
+      console.warn('Erro ao persistir no Firebase Firestore:', firestoreErr);
+    }
+  })();
 
-  // 3. Direct Firebase Firestore Write
-  try {
-    const docId = updatedInspection.id;
-    const docRef = doc(db, 'inspections', docId);
-    await setDoc(docRef, updatedInspection, { merge: true });
-  } catch (firestoreErr) {
-    console.warn('Erro ao salvar no Firestore (mantido com segurança no banco local/servidor):', firestoreErr);
-  }
+  const backendPromise = (async () => {
+    try {
+      await fetch('/api/inspections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(safeData),
+      });
+    } catch (serverErr) {
+      console.debug('Aviso ao sincronizar com servidor central:', serverErr);
+    }
+  })();
+
+  await Promise.allSettled([firestorePromise, backendPromise]);
 
   return updatedInspection;
 }
@@ -645,7 +661,8 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
       const batch = writeBatch(db);
       merged.forEach((insp) => {
         const docRef = doc(db, 'inspections', insp.id);
-        batch.set(docRef, { ...insp, sincronizado: true, updatedAt: new Date().toISOString() }, { merge: true });
+        const safe = sanitizeForFirestore({ ...insp, sincronizado: true, updatedAt: new Date().toISOString() });
+        batch.set(docRef, safe, { merge: true });
       });
       await batch.commit();
     } catch (e) {
