@@ -206,12 +206,12 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
               <h1 className="text-base sm:text-2xl font-black text-[#FFFFFF] tracking-tight">
                 REGISTROS DE INSPEÇÃO
               </h1>
-              <span className="px-1.5 py-0.5 bg-[#0F1726] border border-[#12346B] text-[#FFFFFF] text-[9px] sm:text-[10px] font-bold flex items-center gap-1">
-                <Database className="w-2.5 h-2.5 text-[#FFFFFF]" /> Firestore Ativo
+              <span className="px-1.5 py-0.5 bg-[#0F1726] border border-emerald-500/40 text-emerald-300 text-[9px] sm:text-[10px] font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" /> Servidor Unificado Ativo
               </span>
             </div>
             <p className="text-[10px] sm:text-xs text-[#A7B0C2] mt-0.5">
-              Consulte, filtre e exporte todas as inspeções salvas e sincronizadas na nuvem.
+              Consulte, filtre e exporte todas as inspeções salvas e sincronizadas em tempo real em todas as plataformas.
             </p>
           </div>
 

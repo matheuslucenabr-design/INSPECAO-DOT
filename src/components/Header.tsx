@@ -104,12 +104,12 @@ export const Header: React.FC<HeaderProps> = ({
             className={`hidden xs:flex items-center gap-1 sm:gap-1.5 px-2 py-1 text-[11px] sm:text-xs font-semibold border ${
               !isOnline
                 ? 'bg-[#0F1726] border-rose-800 text-rose-300'
-                : 'bg-[#0F1726] border-[#12346B] text-[#A7B0C2]'
+                : 'bg-[#0F1726] border-emerald-500/40 text-emerald-300'
             }`}
             title={
               !isOnline
-                ? 'Operando offline (salvo localmente)'
-                : 'Conectado ao Firebase Firestore e Servidor Central'
+                ? 'Operando offline temporariamente (alterações serão sincronizadas com o servidor ao reconectar)'
+                : 'Servidor Central Unificado Conectado em Tempo Real (todas as plataformas e dispositivos integrados)'
             }
           >
             {!isOnline ? (
@@ -119,8 +119,9 @@ export const Header: React.FC<HeaderProps> = ({
               </>
             ) : (
               <>
-                <span className="w-1.5 h-1.5 bg-emerald-400 animate-pulse" />
-                <span className="hidden sm:inline">Nuvem Ativa</span>
+                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+                <span className="hidden sm:inline font-medium">Servidor Unificado</span>
+                <span className="sm:hidden font-medium">Servidor</span>
               </>
             )}
           </div>

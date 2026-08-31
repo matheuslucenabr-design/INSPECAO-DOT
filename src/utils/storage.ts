@@ -877,11 +877,24 @@ export function setupRealtimeSync(
     }
   }
 
-  // 4. Also setup SSE listener as secondary sync fallback
+  // 4. Setup Primary Real-time SSE Stream directly with the Single Unified Server
   let eventSource: EventSource | null = null;
-  if (typeof window !== 'undefined' && 'EventSource' in window) {
+  let isCleaningUp = false;
+  let reconnectTimer: any = null;
+
+  const connectSSE = () => {
+    if (isCleaningUp || typeof window === 'undefined' || !('EventSource' in window)) return;
+
     try {
+      if (eventSource) {
+        eventSource.close();
+      }
       eventSource = new EventSource('/api/events');
+
+      eventSource.addEventListener('connected', () => {
+        // Connected to unified server
+      });
+
       eventSource.addEventListener('database_update', (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
@@ -901,12 +914,46 @@ export function setupRealtimeSync(
               onInspectionsUpdate(inMemoryInspections);
             }
           }
-        } catch {}
+        } catch (e) {
+          console.debug('Error processing database_update SSE:', e);
+        }
       });
-    } catch {}
-  }
+
+      eventSource.addEventListener('types_update', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && Array.isArray(data.types) && data.types.length > 0) {
+            localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
+            if (onTypesUpdate) onTypesUpdate(data.types);
+          }
+        } catch (e) {
+          console.debug('Error processing types_update SSE:', e);
+        }
+      });
+
+      eventSource.onerror = () => {
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        if (!isCleaningUp) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connectSSE, 3000);
+        }
+      };
+    } catch (err) {
+      if (!isCleaningUp) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectSSE, 3000);
+      }
+    }
+  };
+
+  connectSSE();
 
   return () => {
+    isCleaningUp = true;
+    clearTimeout(reconnectTimer);
     if (unsubscribeFirestore) unsubscribeFirestore();
     if (unsubscribeDeleted) unsubscribeDeleted();
     if (unsubscribeTypes) unsubscribeTypes();
