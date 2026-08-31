@@ -31,6 +31,9 @@ interface Inspection {
   status: 'rascunho' | 'processando' | 'concluida' | 'sincronizada';
   dataCriacao: string;
   dataEnvio?: string;
+  timestamp?: number;
+  createdAt?: string;
+  updatedAt?: string;
   obra: string;
   equipe: string;
   tecnicoResponsavel: string;
@@ -61,6 +64,7 @@ const DEFAULT_INSPECTION_TYPES = [
 interface DatabaseSchema {
   inspections: Inspection[];
   inspectionTypes: string[];
+  deletedIds: string[];
   lastUpdated: string;
 }
 
@@ -75,14 +79,19 @@ function initializeDatabase(): DatabaseSchema {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
       const parsed = JSON.parse(content);
       if (parsed && Array.isArray(parsed.inspections)) {
-        // Filter out any mock/seed inspections
+        const deletedSet = new Set<string>(Array.isArray(parsed.deletedIds) ? parsed.deletedIds : []);
+
+        // Filter out any mock/seed inspections and deleted records
         parsed.inspections = parsed.inspections.filter(
           (insp: any) =>
             insp.id !== 'REG-2026-SE01-A1' &&
             insp.id !== 'REG-2026-SE02-B2' &&
             insp.uuid !== 'seed-uuid-1' &&
-            insp.uuid !== 'seed-uuid-2'
+            insp.uuid !== 'seed-uuid-2' &&
+            !deletedSet.has(insp.id) &&
+            !deletedSet.has(insp.uuid)
         );
+        parsed.deletedIds = Array.from(deletedSet);
         fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
         return parsed;
       }
@@ -95,6 +104,7 @@ function initializeDatabase(): DatabaseSchema {
   const initialDb: DatabaseSchema = {
     inspections: [],
     inspectionTypes: DEFAULT_INSPECTION_TYPES,
+    deletedIds: [],
     lastUpdated: new Date().toISOString(),
   };
 
@@ -182,13 +192,22 @@ async function startServer() {
     });
   });
 
-  // API: Get all inspections from central system database
+  // API: Get all inspections and deleted IDs from central system database
   app.get('/api/inspections', (req, res) => {
     res.json({
       success: true,
       total: dbMemory.inspections.length,
       inspections: dbMemory.inspections,
+      deletedIds: dbMemory.deletedIds || [],
       lastUpdated: dbMemory.lastUpdated,
+    });
+  });
+
+  // API: Get deleted inspection IDs
+  app.get('/api/deleted-ids', (req, res) => {
+    res.json({
+      success: true,
+      deletedIds: dbMemory.deletedIds || [],
     });
   });
 
@@ -199,6 +218,13 @@ async function startServer() {
       if (!inspection || !inspection.id) {
         res.status(400).json({ success: false, error: 'Dados de inspeção inválidos' });
         return;
+      }
+
+      // If user submits a newly saved inspection, ensure it is no longer marked deleted
+      if (dbMemory.deletedIds) {
+        dbMemory.deletedIds = dbMemory.deletedIds.filter(
+          (dId) => dId !== inspection.id && dId !== inspection.uuid
+        );
       }
 
       const existingIndex = dbMemory.inspections.findIndex(
@@ -221,6 +247,7 @@ async function startServer() {
         inspectionId: savedItem.id,
         inspection: savedItem,
         inspections: dbMemory.inspections,
+        deletedIds: dbMemory.deletedIds,
         total: dbMemory.inspections.length,
         lastUpdated: dbMemory.lastUpdated,
       });
@@ -237,29 +264,46 @@ async function startServer() {
     }
   });
 
-  // API: Delete an inspection from central database
+  // API: Delete an inspection permanently from central database
   app.delete('/api/inspections/:id', (req, res) => {
     try {
       const { id } = req.params;
-      const initialCount = dbMemory.inspections.length;
-      dbMemory.inspections = dbMemory.inspections.filter((item) => item.id !== id && item.uuid !== id);
-
-      if (dbMemory.inspections.length !== initialCount) {
-        persistDatabase();
-
-        // Broadcast real-time deletion to all connected browsers & devices immediately
-        broadcastRealtimeUpdate('database_update', {
-          action: 'delete',
-          deletedId: id,
-          inspections: dbMemory.inspections,
-          total: dbMemory.inspections.length,
-          lastUpdated: dbMemory.lastUpdated,
-        });
+      
+      // Collect IDs to mark as permanently deleted
+      const matched = dbMemory.inspections.find((item) => item.id === id || item.uuid === id);
+      const toDeleteIds = new Set<string>([id]);
+      if (matched) {
+        if (matched.id) toDeleteIds.add(matched.id);
+        if (matched.uuid) toDeleteIds.add(matched.uuid);
       }
+
+      if (!dbMemory.deletedIds) dbMemory.deletedIds = [];
+      toDeleteIds.forEach((dId) => {
+        if (!dbMemory.deletedIds.includes(dId)) {
+          dbMemory.deletedIds.push(dId);
+        }
+      });
+
+      dbMemory.inspections = dbMemory.inspections.filter(
+        (item) => !toDeleteIds.has(item.id) && (!item.uuid || !toDeleteIds.has(item.uuid))
+      );
+
+      persistDatabase();
+
+      // Broadcast real-time deletion to all connected browsers & devices immediately
+      broadcastRealtimeUpdate('database_update', {
+        action: 'delete',
+        deletedId: id,
+        deletedIds: dbMemory.deletedIds,
+        inspections: dbMemory.inspections,
+        total: dbMemory.inspections.length,
+        lastUpdated: dbMemory.lastUpdated,
+      });
 
       res.json({
         success: true,
-        message: `Inspeção ${id} removida com sucesso`,
+        message: `Inspeção ${id} removida permanentemente com sucesso`,
+        deletedIds: dbMemory.deletedIds,
         total: dbMemory.inspections.length,
       });
     } catch (err: any) {
@@ -346,6 +390,85 @@ async function startServer() {
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message || 'Erro ao importar backup' });
+    }
+  });
+
+  // API: Full Multiplatform Synchronization Endpoint
+  app.post('/api/sync', (req, res) => {
+    try {
+      const { inspections, deletedIds } = req.body;
+      
+      // 1. Process and record any deletion tombstones
+      if (Array.isArray(deletedIds)) {
+        if (!dbMemory.deletedIds) dbMemory.deletedIds = [];
+        deletedIds.forEach((dId: string) => {
+          if (dId && typeof dId === 'string' && !dbMemory.deletedIds.includes(dId)) {
+            dbMemory.deletedIds.push(dId);
+          }
+        });
+      }
+
+      const deletedSet = new Set<string>(dbMemory.deletedIds || []);
+
+      // 2. Filter existing database with deletedSet
+      dbMemory.inspections = dbMemory.inspections.filter(
+        (item) => !deletedSet.has(item.id) && (!item.uuid || !deletedSet.has(item.uuid))
+      );
+
+      // 3. Merge incoming inspections that are not deleted
+      let hasChanges = false;
+      if (Array.isArray(inspections)) {
+        const map = new Map<string, Inspection>();
+        dbMemory.inspections.forEach((i) => map.set(i.id, i));
+
+        for (const item of inspections) {
+          if (!item || !item.id || deletedSet.has(item.id) || (item.uuid && deletedSet.has(item.uuid))) {
+            continue;
+          }
+
+          if (!map.has(item.id)) {
+            map.set(item.id, { ...item, sincronizado: true });
+            hasChanges = true;
+          } else {
+            const existing = map.get(item.id)!;
+            const existingTime = existing.updatedAt || existing.dataEnvio || existing.dataCriacao || '';
+            const incomingTime = item.updatedAt || item.dataEnvio || item.dataCriacao || '';
+            if (incomingTime >= existingTime || (item.fotos?.length || 0) > (existing.fotos?.length || 0)) {
+              map.set(item.id, { ...item, sincronizado: true });
+              hasChanges = true;
+            }
+          }
+        }
+
+        dbMemory.inspections = Array.from(map.values()).sort((a, b) => {
+          const timeA = a.timestamp || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+          const timeB = b.timestamp || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+          return (timeB || 0) - (timeA || 0) || b.id.localeCompare(a.id);
+        });
+      }
+
+      if (hasChanges || (Array.isArray(deletedIds) && deletedIds.length > 0)) {
+        persistDatabase();
+        broadcastRealtimeUpdate('database_update', {
+          action: 'sync',
+          inspections: dbMemory.inspections,
+          deletedIds: dbMemory.deletedIds,
+          total: dbMemory.inspections.length,
+          lastUpdated: dbMemory.lastUpdated,
+        });
+      }
+
+      res.json({
+        success: true,
+        inspections: dbMemory.inspections,
+        deletedIds: dbMemory.deletedIds || [],
+        total: dbMemory.inspections.length,
+        lastUpdated: dbMemory.lastUpdated,
+        message: 'Sincronização multiplataforma concluída com sucesso',
+      });
+    } catch (err: any) {
+      console.error('Error during /api/sync:', err);
+      res.status(500).json({ success: false, error: err.message || 'Erro durante sincronização' });
     }
   });
 

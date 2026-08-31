@@ -11,6 +11,7 @@ import {
   Upload,
   CheckCircle2,
   AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Inspection, FilterOptions } from '../../types/inspection';
 import { RecordCard } from './RecordCard';
@@ -25,6 +26,9 @@ interface RecordsViewProps {
   onNewInspection: () => void;
   onDeleteInspection: (id: string) => void;
   onReloadInspections?: () => void;
+  onSync?: () => void;
+  isSyncing?: boolean;
+  lastSyncTime?: string;
 }
 
 export const RecordsView: React.FC<RecordsViewProps> = ({
@@ -32,6 +36,9 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
   onNewInspection,
   onDeleteInspection,
   onReloadInspections,
+  onSync,
+  isSyncing,
+  lastSyncTime,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -209,6 +216,25 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            {/* Multiplatform Sync Button */}
+            <button
+              onClick={onSync}
+              disabled={isSyncing}
+              className={`py-1.5 sm:py-2.5 px-2.5 sm:px-3 text-[11px] sm:text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border shadow-sm ${
+                isSyncing
+                  ? 'bg-[#12346B] border-[#A7B0C2] text-[#FFFFFF] opacity-90'
+                  : 'bg-[#0F1726] hover:bg-[#12346B] border-[#12346B] text-[#FFFFFF] active:scale-95'
+              }`}
+              title={
+                lastSyncTime
+                  ? `Última sincronização às ${lastSyncTime}. Clique para atualizar os registros com o servidor central.`
+                  : 'Sincronizar com o servidor do sistema para que todos tenham acesso aos mesmos registros'
+              }
+            >
+              <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin text-[#FFFFFF]' : 'text-emerald-400'}`} />
+              <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+            </button>
+
             <button
               onClick={handleBackupExport}
               className="py-1.5 sm:py-2.5 px-2 sm:px-3 bg-[#12346B] hover:bg-[#12346B]/80 border border-[#A7B0C2]/30 text-[#FFFFFF] text-[11px] sm:text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"

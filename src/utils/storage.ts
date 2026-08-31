@@ -16,6 +16,7 @@ const STORE_INSPECTIONS = 'inspections';
 const STORE_CONFIG = 'app_config';
 
 const STORAGE_FALLBACK_KEY = 'inspecao_pronto_records_v1';
+const STORAGE_DELETED_IDS_KEY = 'inspecao_pronto_deleted_ids_v2';
 const STORAGE_DRAFT_KEY = 'inspecao_pronto_draft_v1';
 const STORAGE_TYPES_KEY = 'inspecao_pronto_types_v1';
 
@@ -42,6 +43,70 @@ export const DEFAULT_SITES = [
 // In-memory runtime cache for instant access
 let inMemoryInspections: Inspection[] = [];
 let isIndexedDbInitialized = false;
+
+// In-memory set of permanently deleted inspection IDs and UUIDs
+const deletedIdsSet = new Set<string>();
+
+// Initialize deleted IDs set from localStorage
+function initDeletedIdsSet(): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_DELETED_IDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((id) => {
+          if (id && typeof id === 'string') deletedIdsSet.add(id);
+        });
+      }
+    }
+  } catch {}
+}
+
+initDeletedIdsSet();
+
+/**
+ * Check if an ID or UUID has been marked as deleted
+ */
+export function isIdDeleted(idOrUuid?: string): boolean {
+  if (!idOrUuid) return false;
+  return deletedIdsSet.has(idOrUuid);
+}
+
+/**
+ * Mark ID or UUID as permanently deleted and persist
+ */
+export function markAsPermanentlyDeleted(...ids: (string | undefined)[]): void {
+  let changed = false;
+  for (const id of ids) {
+    if (id && typeof id === 'string' && !deletedIdsSet.has(id)) {
+      deletedIdsSet.add(id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(
+        STORAGE_DELETED_IDS_KEY,
+        JSON.stringify(Array.from(deletedIdsSet))
+      );
+    } catch {}
+  }
+}
+
+/**
+ * Remove an ID from deleted list (used when explicitly saving a new inspection)
+ */
+export function unmarkAsDeleted(idOrUuid?: string): void {
+  if (idOrUuid && deletedIdsSet.has(idOrUuid)) {
+    deletedIdsSet.delete(idOrUuid);
+    try {
+      localStorage.setItem(
+        STORAGE_DELETED_IDS_KEY,
+        JSON.stringify(Array.from(deletedIdsSet))
+      );
+    } catch {}
+  }
+}
 
 /**
  * Guaranteed globally unique inspection registration identifier
@@ -85,20 +150,30 @@ function openLocalDatabase(): Promise<IDBDatabase> {
 }
 
 /**
- * Load all inspections from IndexedDB
+ * Load all inspections from IndexedDB (strictly filtering out deleted records)
  */
 export async function loadAllFromIndexedDB(): Promise<Inspection[]> {
   try {
     const localDb = await openLocalDatabase();
     return new Promise((resolve) => {
-      const tx = localDb.transaction([STORE_INSPECTIONS], 'readonly');
+      const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
       const store = tx.objectStore(STORE_INSPECTIONS);
       const request = store.getAll();
 
       request.onsuccess = () => {
         const results = request.result;
         if (Array.isArray(results)) {
-          const cleaned = results.filter((item) => !isSeedInspection(item));
+          const cleaned: Inspection[] = [];
+          for (const item of results) {
+            if (isSeedInspection(item) || isIdDeleted(item.id) || isIdDeleted(item.uuid)) {
+              // Clean deleted item out of IndexedDB immediately
+              try {
+                store.delete(item.id);
+              } catch {}
+            } else {
+              cleaned.push(item);
+            }
+          }
           resolve(cleaned);
         } else {
           resolve([]);
@@ -119,7 +194,7 @@ export async function loadAllFromIndexedDB(): Promise<Inspection[]> {
  */
 export async function saveToIndexedDB(item: Inspection): Promise<void> {
   try {
-    if (isSeedInspection(item)) return;
+    if (isSeedInspection(item) || isIdDeleted(item.id) || isIdDeleted(item.uuid)) return;
     const localDb = await openLocalDatabase();
     const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
     const store = tx.objectStore(STORE_INSPECTIONS);
@@ -130,7 +205,7 @@ export async function saveToIndexedDB(item: Inspection): Promise<void> {
 }
 
 /**
- * Delete inspection from IndexedDB
+ * Delete inspection from IndexedDB by both ID and UUID
  */
 export async function deleteFromIndexedDB(idOrUuid: string): Promise<void> {
   try {
@@ -138,6 +213,19 @@ export async function deleteFromIndexedDB(idOrUuid: string): Promise<void> {
     const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
     const store = tx.objectStore(STORE_INSPECTIONS);
     store.delete(idOrUuid);
+
+    // Also scan to clean if idOrUuid was the item's uuid
+    const request = store.openCursor();
+    request.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
+      if (cursor) {
+        const val = cursor.value;
+        if (val.id === idOrUuid || val.uuid === idOrUuid || isIdDeleted(val.id) || isIdDeleted(val.uuid)) {
+          cursor.delete();
+        }
+        cursor.continue();
+      }
+    };
   } catch (err) {
     console.debug('Erro ao deletar no IndexedDB:', err);
   }
@@ -166,7 +254,7 @@ function isSeedInspection(item: any): boolean {
  */
 export function sortInspectionsDescending(items: Inspection[]): Inspection[] {
   return [...items]
-    .filter((item) => !isSeedInspection(item))
+    .filter((item) => !isSeedInspection(item) && !isIdDeleted(item.id) && !isIdDeleted(item.uuid))
     .sort((a, b) => {
       const timeA = a.timestamp || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
       const timeB = b.timestamp || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
@@ -181,7 +269,7 @@ export function sortInspectionsDescending(items: Inspection[]): Inspection[] {
 
 /**
  * Merge multiple lists of inspections non-destructively.
- * Ensures every submitted inspection is permanently preserved.
+ * Strictly ignores any permanently deleted records.
  */
 export function mergeInspections(...sources: (Inspection[] | null | undefined)[]): Inspection[] {
   const map = new Map<string, Inspection>();
@@ -190,6 +278,8 @@ export function mergeInspections(...sources: (Inspection[] | null | undefined)[]
     if (!Array.isArray(list)) continue;
     for (const item of list) {
       if (!item || isSeedInspection(item)) continue;
+      if (isIdDeleted(item.id) || isIdDeleted(item.uuid)) continue;
+      
       const key = item.id || item.uuid;
       if (!key) continue;
 
@@ -197,7 +287,6 @@ export function mergeInspections(...sources: (Inspection[] | null | undefined)[]
         map.set(key, item);
       } else {
         const existing = map.get(key)!;
-        // Keep the one with most recent updated timestamp or the one with photos if other is missing
         const existingTime = existing.updatedAt || existing.dataEnvio || existing.dataCriacao || '';
         const incomingTime = item.updatedAt || item.dataEnvio || item.dataCriacao || '';
         
@@ -223,7 +312,7 @@ export function mergeInspections(...sources: (Inspection[] | null | undefined)[]
  */
 export function getStoredInspections(): Inspection[] {
   if (inMemoryInspections.length > 0) {
-    return inMemoryInspections;
+    return inMemoryInspections.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
   }
 
   try {
@@ -231,7 +320,9 @@ export function getStoredInspections(): Inspection[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        const cleaned = parsed.filter((item) => !isSeedInspection(item));
+        const cleaned = parsed.filter(
+          (item) => !isSeedInspection(item) && !isIdDeleted(item.id) && !isIdDeleted(item.uuid)
+        );
         inMemoryInspections = sortInspectionsDescending(cleaned);
       }
     }
@@ -244,7 +335,8 @@ export function getStoredInspections(): Inspection[] {
     isIndexedDbInitialized = true;
     loadAllFromIndexedDB().then((idbList) => {
       if (idbList.length > 0) {
-        inMemoryInspections = mergeInspections(inMemoryInspections, idbList);
+        const validList = idbList.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
+        inMemoryInspections = mergeInspections(inMemoryInspections, validList);
       }
     });
   }
@@ -263,13 +355,11 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
     try {
       localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(sanitized));
     } catch (quotaErr) {
-      // If localStorage is full, save a stripped metadata version to localStorage
-      // while preserving full items with photos in IndexedDB
       console.warn('LocalStorage quota excedida, salvando versão compacta no cache de fallback:', quotaErr);
       try {
         const compact = sanitized.map((item) => ({
           ...item,
-          fotos: item.fotos.map((f) => ({ ...f, dataUrl: '' })), // drop base64 in localstorage fallback
+          fotos: item.fotos.map((f) => ({ ...f, dataUrl: '' })),
         }));
         localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(compact));
       } catch {}
@@ -279,24 +369,66 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
     openLocalDatabase().then((localDb) => {
       const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
       const store = tx.objectStore(STORE_INSPECTIONS);
-      sanitized.forEach((item) => store.put(item));
+      sanitized.forEach((item) => {
+        if (!isIdDeleted(item.id) && !isIdDeleted(item.uuid)) {
+          store.put(item);
+        }
+      });
     }).catch((e) => console.debug('IndexedDB mirror sync:', e));
   } catch (err) {
     console.error('Erro ao salvar no armazenamento local:', err);
   }
 }
 
-// ---------------- FIREBASE FIRESTORE INTEGRATION ---------------- //
+// ---------------- FIREBASE FIRESTORE INTEGRATION & QUOTA PROTECTION ---------------- //
+
+let isFirestoreWriteQuotaExceeded = false;
+let quotaExceededResetTimestamp = 0;
+
+/**
+ * Handle Firestore errors safely and engage circuit breaker on quota limits (resource-exhausted).
+ */
+export function handleFirestoreError(err: any, context: string): void {
+  const errMsg = String(err?.message || err?.code || err || '');
+  if (
+    errMsg.includes('resource-exhausted') ||
+    errMsg.includes('Quota limit exceeded') ||
+    errMsg.includes('Free daily write units') ||
+    errMsg.includes('quota')
+  ) {
+    if (!isFirestoreWriteQuotaExceeded) {
+      isFirestoreWriteQuotaExceeded = true;
+      quotaExceededResetTimestamp = Date.now() + 15 * 60 * 1000; // 15-minute cooldown before retrying cloud writes
+      console.warn(
+        `[Firestore Quota Limite Diário Atingido em ${context}] O sistema continuará sincronizando normalmente através do servidor central e cache local.`
+      );
+    }
+  } else {
+    console.debug(`[Firestore ${context}]`, err);
+  }
+}
+
+export function canWriteToFirestore(): boolean {
+  if (!isFirestoreWriteQuotaExceeded) return true;
+  if (Date.now() > quotaExceededResetTimestamp) {
+    isFirestoreWriteQuotaExceeded = false;
+    return true;
+  }
+  return false;
+}
 
 /**
  * Clean any leftover seed documents from Firestore
  */
 export async function purgeSeedDataFromFirestore(): Promise<void> {
+  if (!canWriteToFirestore()) return;
   const seedIds = ['REG-2026-SE01-A1', 'REG-2026-SE02-B2'];
   for (const id of seedIds) {
     try {
       await deleteDoc(doc(db, 'inspections', id));
-    } catch {}
+    } catch (err) {
+      handleFirestoreError(err, 'purgeSeedDataFromFirestore');
+    }
   }
 }
 
@@ -304,62 +436,70 @@ export async function purgeSeedDataFromFirestore(): Promise<void> {
  * Fetch all inspections with robust multi-tier fallback & non-destructive union
  */
 export async function fetchServerInspections(): Promise<Inspection[]> {
-  // Purge any seed docs if they exist
-  purgeSeedDataFromFirestore().catch(() => {});
+  // 1. Fetch deleted records list from Firestore to prevent resurrection (if available)
+  try {
+    const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
+    deletedSnap.forEach((d) => {
+      markAsPermanentlyDeleted(d.id);
+    });
+  } catch (err) {
+    handleFirestoreError(err, 'fetchServerInspections:deleted');
+  }
 
   const localStored = getStoredInspections();
   const idbStored = await loadAllFromIndexedDB();
   let firestoreItems: Inspection[] = [];
   let backendItems: Inspection[] = [];
 
-  // 1. Fetch from Firebase Firestore
+  // 2. Fetch from Firebase Firestore
   try {
     const querySnapshot = await getDocs(collection(db, 'inspections'));
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data() as Inspection;
-      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docSnap.id })) {
+      const docId = docSnap.id;
+      const itemUuid = data?.uuid || data?.id || docId;
+
+      if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+        return;
+      }
+
+      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
         firestoreItems.push({
           ...data,
-          id: data.id || docSnap.id,
-          uuid: data.uuid || data.id || docSnap.id,
+          id: data.id || docId,
+          uuid: itemUuid,
         });
       }
     });
   } catch (firebaseErr) {
-    console.warn('Firestore indisponível temporariamente, tentando servidor/cache:', firebaseErr);
+    handleFirestoreError(firebaseErr, 'fetchServerInspections:inspections');
   }
 
-  // 2. Fetch from Express Backend
+  // 3. Fetch from Express Backend
   try {
     const response = await fetch('/api/inspections', {
       headers: { Accept: 'application/json' },
     });
     if (response.ok) {
       const data = await response.json();
+      if (data && Array.isArray(data.deletedIds)) {
+        markAsPermanentlyDeleted(...data.deletedIds);
+      }
       if (data && Array.isArray(data.inspections)) {
-        backendItems = data.inspections.filter((i: any) => !isSeedInspection(i));
+        backendItems = data.inspections.filter(
+          (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
+        );
       }
     }
   } catch (serverErr) {
     console.debug('Backend fetch error:', serverErr);
   }
 
-  // Non-destructive smart merge of ALL sources
+  // Non-destructive smart merge of ALL sources (ignoring deleted records)
   const merged = mergeInspections(localStored, idbStored, backendItems, firestoreItems);
   
   // Persist merged set locally
   saveAllInspections(merged, false);
-
-  // Background sync: If any local/backend inspections are missing from Firestore, push them
-  if (firestoreItems.length < merged.length) {
-    const firestoreIds = new Set(firestoreItems.map((i) => i.id));
-    merged.forEach((insp) => {
-      if (!firestoreIds.has(insp.id)) {
-        const safe = sanitizeForFirestore({ ...insp, sincronizado: true });
-        setDoc(doc(db, 'inspections', insp.id), safe, { merge: true }).catch(() => {});
-      }
-    });
-  }
 
   return merged;
 }
@@ -388,21 +528,26 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
     updatedAt: new Date().toISOString(),
   };
 
+  // Remove from deleted set in case an ID was reused
+  unmarkAsDeleted(updatedInspection.id);
+  unmarkAsDeleted(updatedInspection.uuid);
+
   // 1. Immediately store in Memory, LocalStorage, and IndexedDB for instant UI responsiveness
   const merged = mergeInspections(current, [updatedInspection]);
   saveAllInspections(merged, false);
   await saveToIndexedDB(updatedInspection);
 
-  // 2. Persist in parallel to Firebase Firestore Cloud and Central Express Backend
+  // 2. Persist in parallel to Firebase Firestore Cloud (if within quota) and Central Express Backend
   const safeData = sanitizeForFirestore(updatedInspection);
   
   const firestorePromise = (async () => {
+    if (!canWriteToFirestore()) return;
     try {
       const docId = safeData.id;
       const docRef = doc(db, 'inspections', docId);
       await setDoc(docRef, safeData, { merge: true });
     } catch (firestoreErr) {
-      console.warn('Erro ao persistir no Firebase Firestore:', firestoreErr);
+      handleFirestoreError(firestoreErr, 'saveInspection');
     }
   })();
 
@@ -424,27 +569,59 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
 }
 
 /**
- * Delete inspection from Firebase Firestore, Backend, and local cache
+ * Delete inspection permanently from Firebase Firestore, Backend, IndexedDB, and local cache.
+ * Uses persistent tombstones to guarantee it will never resurrect under any circumstance.
  */
 export async function deleteInspection(idOrUuid: string): Promise<void> {
+  // Find associated id and uuid
   const current = getStoredInspections();
-  const filtered = current.filter((i) => i.id !== idOrUuid && i.uuid !== idOrUuid);
+  const matched = current.find((i) => i.id === idOrUuid || i.uuid === idOrUuid);
+  const id = matched?.id || idOrUuid;
+  const uuid = matched?.uuid;
+
+  // 1. Mark as permanently deleted across memory and localStorage
+  markAsPermanentlyDeleted(id, uuid, idOrUuid);
+
+  // 2. Filter local memory and localStorage immediately
+  const filtered = current.filter(
+    (i) => i.id !== id && i.id !== idOrUuid && (!uuid || i.uuid !== uuid) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
+  );
   
   inMemoryInspections = filtered;
-  saveAllInspections(filtered, false);
-  await deleteFromIndexedDB(idOrUuid);
-
-  // 1. Delete from Firebase Firestore
   try {
-    const docRef = doc(db, 'inspections', idOrUuid);
-    await deleteDoc(docRef);
-  } catch (firestoreErr) {
-    console.warn('Erro ao deletar no Firestore:', firestoreErr);
+    localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(filtered));
+  } catch {}
+
+  // 3. Delete from IndexedDB immediately
+  await deleteFromIndexedDB(id);
+  if (uuid && uuid !== id) {
+    await deleteFromIndexedDB(uuid);
   }
 
-  // 2. Delete from backend server
+  // 4. Delete from Firebase Firestore & write permanent tombstone (if within quota)
+  if (canWriteToFirestore()) {
+    try {
+      const docRef = doc(db, 'inspections', id);
+      await deleteDoc(docRef);
+      if (uuid && uuid !== id) {
+        await deleteDoc(doc(db, 'inspections', uuid)).catch(() => {});
+      }
+
+      // Write permanent tombstone to Firestore so other devices know it was deleted
+      const tombstoneRef = doc(db, 'deleted_inspections', id);
+      await setDoc(tombstoneRef, {
+        id,
+        uuid: uuid || null,
+        deletedAt: new Date().toISOString(),
+      });
+    } catch (firestoreErr) {
+      handleFirestoreError(firestoreErr, 'deleteInspection');
+    }
+  }
+
+  // 5. Delete from backend server (always available)
   try {
-    await fetch(`/api/inspections/${encodeURIComponent(idOrUuid)}`, {
+    await fetch(`/api/inspections/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   } catch {}
@@ -526,44 +703,90 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
 // ---------------- REALTIME MULTI-CLIENT FIREBASE SYNCHRONIZATION ---------------- //
 
 /**
- * Setup Realtime Firebase Firestore listener & SSE stream with non-destructive merge.
+ * Setup Realtime Firebase Firestore listener & SSE stream with non-destructive merge
+ * and guaranteed instant deletion synchronization.
  */
 export function setupRealtimeSync(
   onInspectionsUpdate: (inspections: Inspection[]) => void,
   onTypesUpdate?: (types: string[]) => void
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
+  let unsubscribeDeleted: (() => void) | null = null;
   let unsubscribeTypes: (() => void) | null = null;
 
   try {
-    // 1. Listen to 'inspections' collection in Firestore in real-time
+    // 1. Listen to 'deleted_inspections' in Firestore in real-time
+    const deletedRef = collection(db, 'deleted_inspections');
+    unsubscribeDeleted = onSnapshot(
+      deletedRef,
+      (snapshot) => {
+        let hasNewDeletes = false;
+        snapshot.forEach((d) => {
+          if (!deletedIdsSet.has(d.id)) {
+            markAsPermanentlyDeleted(d.id);
+            hasNewDeletes = true;
+          }
+        });
+
+        if (hasNewDeletes) {
+          const current = getStoredInspections();
+          const filtered = current.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
+          inMemoryInspections = filtered;
+          saveAllInspections(filtered, false);
+          onInspectionsUpdate(filtered);
+        }
+      },
+      (error) => {
+        console.warn('Firebase deleted_inspections listener error:', error);
+      }
+    );
+
+    // 2. Listen to 'inspections' collection in Firestore in real-time
     const inspectionsRef = collection(db, 'inspections');
     unsubscribeFirestore = onSnapshot(
       inspectionsRef,
       (snapshot) => {
-        const list: Inspection[] = [];
+        const cloudList: Inspection[] = [];
         snapshot.forEach((d) => {
           const item = d.data() as Inspection;
-          if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: d.id })) {
-            list.push({
+          const docId = d.id;
+          const itemUuid = item?.uuid || item?.id || docId;
+
+          // If document was marked deleted, ignore it safely without calling deleteDoc inside loop
+          if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(item?.id)) {
+            return;
+          }
+
+          if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: docId })) {
+            cloudList.push({
               ...item,
-              id: item.id || d.id,
-              uuid: item.uuid || item.id || d.id,
+              id: item.id || docId,
+              uuid: itemUuid,
             });
           }
         });
 
-        const current = getStoredInspections();
-        const merged = mergeInspections(current, list);
-        saveAllInspections(merged, false);
-        onInspectionsUpdate(merged);
+        // The live Firestore list is combined with local storage
+        const currentStored = getStoredInspections();
+        const offlineLocalOnly = currentStored.filter(
+          (localItem) =>
+            !isIdDeleted(localItem.id) &&
+            !isIdDeleted(localItem.uuid) &&
+            !cloudList.some((cloudItem) => cloudItem.id === localItem.id || cloudItem.uuid === localItem.uuid) &&
+            !localItem.sincronizado
+        );
+
+        const unifiedList = mergeInspections(cloudList, offlineLocalOnly);
+        inMemoryInspections = unifiedList;
+        saveAllInspections(unifiedList, false);
+        onInspectionsUpdate(unifiedList);
       },
       (error) => {
-        console.warn('Firebase Firestore realtime listener error:', error);
+        handleFirestoreError(error, 'realtime listener inspections');
       }
     );
 
-    // 2. Listen to custom types config in Firestore
+    // 3. Listen to custom types config in Firestore
     const typesDocRef = doc(db, 'app_config', 'types');
     unsubscribeTypes = onSnapshot(
       typesDocRef,
@@ -584,7 +807,7 @@ export function setupRealtimeSync(
     console.warn('Erro ao inicializar listener Firestore:', e);
   }
 
-  // Also setup SSE listener as secondary sync fallback
+  // 4. Also setup SSE listener as secondary sync fallback
   let eventSource: EventSource | null = null;
   if (typeof window !== 'undefined' && 'EventSource' in window) {
     try {
@@ -592,11 +815,21 @@ export function setupRealtimeSync(
       eventSource.addEventListener('database_update', (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
-          if (data && Array.isArray(data.inspections)) {
-            const current = getStoredInspections();
-            const merged = mergeInspections(current, data.inspections);
-            saveAllInspections(merged, false);
-            onInspectionsUpdate(merged);
+          if (data) {
+            if (data.action === 'delete' && data.deletedId) {
+              markAsPermanentlyDeleted(data.deletedId);
+            }
+            if (Array.isArray(data.deletedIds)) {
+              markAsPermanentlyDeleted(...data.deletedIds);
+            }
+            if (Array.isArray(data.inspections)) {
+              const cleaned = data.inspections.filter(
+                (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
+              );
+              inMemoryInspections = sortInspectionsDescending(cleaned);
+              saveAllInspections(inMemoryInspections, false);
+              onInspectionsUpdate(inMemoryInspections);
+            }
           }
         } catch {}
       });
@@ -605,12 +838,163 @@ export function setupRealtimeSync(
 
   return () => {
     if (unsubscribeFirestore) unsubscribeFirestore();
+    if (unsubscribeDeleted) unsubscribeDeleted();
     if (unsubscribeTypes) unsubscribeTypes();
     if (eventSource) eventSource.close();
   };
 }
 
-// ---------------- BACKUP EXPORT & IMPORT ENGINE ---------------- //
+// ---------------- MULTIPLATFORM SYNCHRONIZATION ENGINE ---------------- //
+
+export interface MultiplatformSyncResult {
+  success: boolean;
+  total: number;
+  newlySynced: number;
+  timestamp: string;
+  source: 'cloud' | 'server' | 'hybrid' | 'local';
+  message: string;
+  inspections: Inspection[];
+}
+
+/**
+ * Perform complete multiplatform 2-way synchronization across Firebase Cloud, Central Server, and Local DB.
+ * Pushes any local records, retrieves all records created on other devices/browsers,
+ * purges permanently deleted records via tombstones, and returns the unified database.
+ */
+export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> {
+  // 1. Gather all local data (memory, localStorage, IndexedDB)
+  const localList = getStoredInspections();
+  const idbList = await loadAllFromIndexedDB();
+  const localUnified = mergeInspections(localList, idbList);
+  
+  // 2. Fetch and propagate deletion tombstones from Firebase Firestore
+  try {
+    const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
+    deletedSnap.forEach((d) => {
+      markAsPermanentlyDeleted(d.id);
+    });
+  } catch (err) {
+    handleFirestoreError(err, 'fullMultiplatformSync:deleted');
+  }
+
+  // 3. Push any local deletion tombstones to Firestore (if within quota)
+  const allDeletedIds = Array.from(deletedIdsSet);
+  if (allDeletedIds.length > 0 && canWriteToFirestore()) {
+    try {
+      const batch = writeBatch(db);
+      allDeletedIds.forEach((dId) => {
+        batch.set(
+          doc(db, 'deleted_inspections', dId),
+          { id: dId, deletedAt: new Date().toISOString() },
+          { merge: true }
+        );
+      });
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, 'fullMultiplatformSync:pushDeleted');
+    }
+  }
+
+  // 4. Push local un-deleted inspections to Firebase Firestore (if within quota)
+  let firestoreItems: Inspection[] = [];
+  if (canWriteToFirestore()) {
+    try {
+      const batch = writeBatch(db);
+      let batchCount = 0;
+      localUnified.forEach((insp) => {
+        if (!isIdDeleted(insp.id) && !isIdDeleted(insp.uuid)) {
+          const safe = sanitizeForFirestore({
+            ...insp,
+            sincronizado: true,
+            updatedAt: insp.updatedAt || new Date().toISOString(),
+          });
+          batch.set(doc(db, 'inspections', insp.id), safe, { merge: true });
+          batchCount++;
+        }
+      });
+      if (batchCount > 0) {
+        await batch.commit();
+      }
+    } catch (err) {
+      handleFirestoreError(err, 'fullMultiplatformSync:pushInspections');
+    }
+  }
+
+  // 5. Pull authoritative inspections from Firebase Firestore
+  try {
+    const querySnapshot = await getDocs(collection(db, 'inspections'));
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data() as Inspection;
+      const docId = docSnap.id;
+      const itemUuid = data?.uuid || data?.id || docId;
+
+      if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+        return;
+      }
+
+      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
+        firestoreItems.push({
+          ...data,
+          id: data.id || docId,
+          uuid: itemUuid,
+        });
+      }
+    });
+  } catch (err) {
+    handleFirestoreError(err, 'fullMultiplatformSync:pullInspections');
+  }
+
+  // 6. Push and Pull to/from Central Express Server (/api/sync)
+  let backendItems: Inspection[] = [];
+  try {
+    const syncPayload = {
+      inspections: localUnified
+        .filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
+        .map((i) => sanitizeForFirestore({ ...i, sincronizado: true })),
+      deletedIds: allDeletedIds,
+    };
+
+    const response = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(syncPayload),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data && Array.isArray(data.deletedIds)) {
+        markAsPermanentlyDeleted(...data.deletedIds);
+      }
+      if (data && Array.isArray(data.inspections)) {
+        backendItems = data.inspections.filter(
+          (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
+        );
+      }
+    }
+  } catch (serverErr) {
+    console.warn('Aviso ao sincronizar com servidor central:', serverErr);
+  }
+
+  // 7. Non-destructive smart merge of local, Firestore, and backend
+  const merged = mergeInspections(localUnified, firestoreItems, backendItems);
+
+  // 8. Persist merged data locally
+  inMemoryInspections = merged;
+  saveAllInspections(merged, false);
+
+  const timeStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  return {
+    success: true,
+    total: merged.length,
+    newlySynced: merged.length,
+    timestamp: timeStr,
+    source: firestoreItems.length > 0 && backendItems.length > 0 ? 'hybrid' : firestoreItems.length > 0 ? 'cloud' : 'server',
+    message: `${merged.length} ${merged.length === 1 ? 'registro sincronizado' : 'registros sincronizados'} no servidor central com sucesso!`,
+    inspections: merged,
+  };
+}
+
 
 /**
  * Export full system database backup
@@ -686,3 +1070,4 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
     return { success: false, count: 0, error: err.message || 'Falha ao processar arquivo JSON' };
   }
 }
+

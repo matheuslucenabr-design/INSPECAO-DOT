@@ -4,6 +4,8 @@ import { Wifi, WifiOff, RefreshCw, ClipboardList, FolderArchive, BarChart3, Plus
 interface HeaderProps {
   isOnline: boolean;
   isSyncing?: boolean;
+  onSync?: () => void;
+  lastSyncTime?: string;
   currentTab: 'inspecao' | 'registros' | 'dashboard';
   onSelectTab: (tab: 'inspecao' | 'registros' | 'dashboard') => void;
   onNewInspection: () => void;
@@ -13,6 +15,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   isOnline,
   isSyncing,
+  onSync,
+  lastSyncTime,
   currentTab,
   onSelectTab,
   onNewInspection,
@@ -70,41 +74,53 @@ export const Header: React.FC<HeaderProps> = ({
         </nav>
 
         {/* Primary Action & Status Zone */}
-        <div className="flex items-center gap-1.5 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2.5">
+          {/* Multiplatform Sync Button */}
+          <button
+            onClick={onSync}
+            disabled={isSyncing}
+            className={`flex items-center gap-1.5 px-2 sm:px-3 py-1 text-xs font-bold transition-all border shadow-sm cursor-pointer ${
+              isSyncing
+                ? 'bg-[#12346B] border-[#A7B0C2] text-[#FFFFFF] opacity-90'
+                : 'bg-[#0F1726] hover:bg-[#12346B] border-[#12346B] text-[#FFFFFF] active:scale-95'
+            }`}
+            title={
+              lastSyncTime
+                ? `Última sincronização às ${lastSyncTime}. Clique para sincronizar agora com o servidor central.`
+                : 'Sincronizar todos os registros no servidor para acesso multiplataforma'
+            }
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-[#FFFFFF]' : 'text-emerald-400'}`} />
+            <span className="hidden sm:inline">
+              {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+            </span>
+            <span className="sm:hidden">
+              {isSyncing ? 'Sync...' : 'Sync'}
+            </span>
+          </button>
+
           {/* Online / Offline status badge */}
           <div
-            className={`flex items-center gap-1 sm:gap-1.5 px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-semibold border ${
+            className={`hidden xs:flex items-center gap-1 sm:gap-1.5 px-2 py-1 text-[11px] sm:text-xs font-semibold border ${
               !isOnline
                 ? 'bg-[#0F1726] border-rose-800 text-rose-300'
-                : isSyncing
-                ? 'bg-[#0F1726] border-[#12346B] text-[#FFFFFF]'
                 : 'bg-[#0F1726] border-[#12346B] text-[#A7B0C2]'
             }`}
             title={
               !isOnline
-                ? 'Operando offline com salvamento local'
-                : isSyncing
-                ? 'Sincronizando alterações com todos os dispositivos...'
-                : 'Sincronização em tempo real ativa para todos os usuários'
+                ? 'Operando offline (salvo localmente)'
+                : 'Conectado ao Firebase Firestore e Servidor Central'
             }
           >
             {!isOnline ? (
               <>
                 <WifiOff className="w-3 h-3 text-rose-400" />
-                <span className="hidden sm:inline">Sem conexão</span>
-                <span className="sm:hidden">Off</span>
-              </>
-            ) : isSyncing ? (
-              <>
-                <RefreshCw className="w-3 h-3 animate-spin text-[#FFFFFF]" />
-                <span className="hidden sm:inline">Atualizando...</span>
-                <span className="sm:hidden">Sync</span>
+                <span className="hidden sm:inline">Offline</span>
               </>
             ) : (
               <>
                 <span className="w-1.5 h-1.5 bg-emerald-400 animate-pulse" />
-                <span className="hidden sm:inline">Tempo Real</span>
-                <span className="sm:hidden">Online</span>
+                <span className="hidden sm:inline">Nuvem Ativa</span>
               </>
             )}
           </div>

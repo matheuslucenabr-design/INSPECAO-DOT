@@ -9,6 +9,7 @@ import { Inspection, InspectionPhoto, GPSLocation } from './types/inspection';
 import {
   getStoredInspections,
   fetchServerInspections,
+  fullMultiplatformSync,
   saveInspection,
   deleteInspection as deleteInspectionFromStorage,
   getSavedDraft,
@@ -28,6 +29,7 @@ import { Step7Success } from './components/InspectionFlow/Step7Success';
 import { RecordsView } from './components/Records/RecordsView';
 import { DashboardView } from './components/DashboardView';
 import { RecordDetailModal } from './components/Records/RecordDetailModal';
+import { CheckCircle2, RefreshCw } from 'lucide-react';
 
 const initialFormData = {
   obra: '',
@@ -53,6 +55,8 @@ export default function App() {
   // Network & Sync State
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [syncToast, setSyncToast] = useState<{ message: string; count: number; time: string } | null>(null);
 
   const syncDatabase = useCallback(async (showIndicator = false) => {
     if (showIndicator) setIsSyncing(true);
@@ -69,6 +73,30 @@ export default function App() {
       }
     }
   }, []);
+
+  // Multiplatform Manual Sync Handler
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const result = await fullMultiplatformSync();
+      if (result.success) {
+        setInspections(result.inspections);
+        setLastSyncTime(result.timestamp);
+        setSyncToast({
+          message: result.message,
+          count: result.total,
+          time: result.timestamp,
+        });
+        setTimeout(() => {
+          setSyncToast(null);
+        }, 4500);
+      }
+    } catch (err) {
+      console.error('Erro na sincronização manual:', err);
+    } finally {
+      setTimeout(() => setIsSyncing(false), 600);
+    }
+  };
 
   // Initial load, Server-Sent Events (SSE) live broadcast, and Polling fallback
   useEffect(() => {
@@ -235,11 +263,11 @@ export default function App() {
 
   // Delete Inspection
   const handleDeleteInspection = async (id: string) => {
-    setInspections((prev) => prev.filter((i) => i.id !== id));
-    await deleteInspectionFromStorage(id);
-    if (viewingInspection && viewingInspection.id === id) {
+    setInspections((prev) => prev.filter((i) => i.id !== id && i.uuid !== id));
+    if (viewingInspection && (viewingInspection.id === id || viewingInspection.uuid === id)) {
       setViewingInspection(null);
     }
+    await deleteInspectionFromStorage(id);
   };
 
   const hasDraftActive = Boolean(
@@ -248,10 +276,33 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0F1726] text-[#FFFFFF] flex flex-col selection:bg-[#12346B] selection:text-[#FFFFFF]">
+      {/* Sync Toast Feedback Banner */}
+      {syncToast && (
+        <div className="fixed top-16 right-3 sm:right-6 z-50 animate-in fade-in slide-in-from-top-3 duration-300">
+          <div className="bg-[#0A1D3D] border border-emerald-500/60 shadow-xl px-4 py-3 text-xs flex items-center gap-3 text-white">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div>
+              <div className="font-bold text-emerald-300">Sincronização Multiplataforma Concluída</div>
+              <div className="text-[11px] text-[#A7B0C2]">
+                {syncToast.count} {syncToast.count === 1 ? 'registro sincronizado' : 'registros sincronizados'} no servidor ({syncToast.time})
+              </div>
+            </div>
+            <button
+              onClick={() => setSyncToast(null)}
+              className="ml-2 text-[#A7B0C2] hover:text-white text-xs font-bold cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 1. Header */}
       <Header
         isOnline={isOnline}
         isSyncing={isSyncing}
+        onSync={handleManualSync}
+        lastSyncTime={lastSyncTime}
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);
@@ -294,6 +345,9 @@ export default function App() {
             onNewInspection={handleNewInspection}
             onDeleteInspection={handleDeleteInspection}
             onReloadInspections={() => syncDatabase(true)}
+            onSync={handleManualSync}
+            isSyncing={isSyncing}
+            lastSyncTime={lastSyncTime}
           />
         )}
 
