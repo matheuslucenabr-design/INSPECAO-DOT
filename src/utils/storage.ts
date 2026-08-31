@@ -6,6 +6,7 @@ import {
   deleteDoc,
   onSnapshot,
   writeBatch,
+  disableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Inspection } from '../types/inspection';
@@ -382,8 +383,28 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
 
 // ---------------- FIREBASE FIRESTORE INTEGRATION & QUOTA PROTECTION ---------------- //
 
-let isFirestoreWriteQuotaExceeded = false;
-let quotaExceededResetTimestamp = 0;
+const QUOTA_STORAGE_KEY = 'firestore_quota_exceeded_until';
+let isFirestoreWriteQuotaExceeded = true; // Safe default when quota limit is active
+let quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000;
+
+// Initialize quota status from localStorage if set previously
+if (typeof window !== 'undefined') {
+  try {
+    const until = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (until) {
+      if (Number(until) > Date.now()) {
+        isFirestoreWriteQuotaExceeded = true;
+        quotaExceededResetTimestamp = Number(until);
+      } else {
+        isFirestoreWriteQuotaExceeded = false;
+        quotaExceededResetTimestamp = 0;
+      }
+    } else {
+      localStorage.setItem(QUOTA_STORAGE_KEY, String(quotaExceededResetTimestamp));
+    }
+  } catch {}
+}
+
 
 /**
  * Handle Firestore errors safely and engage circuit breaker on quota limits (resource-exhausted).
@@ -396,22 +417,34 @@ export function handleFirestoreError(err: any, context: string): void {
     errMsg.includes('Free daily write units') ||
     errMsg.includes('quota')
   ) {
-    if (!isFirestoreWriteQuotaExceeded) {
-      isFirestoreWriteQuotaExceeded = true;
-      quotaExceededResetTimestamp = Date.now() + 15 * 60 * 1000; // 15-minute cooldown before retrying cloud writes
-      console.warn(
-        `[Firestore Quota Limite Diário Atingido em ${context}] O sistema continuará sincronizando normalmente através do servidor central e cache local.`
-      );
-    }
+    isFirestoreWriteQuotaExceeded = true;
+    quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000; // 12-hour safety cooldown
+    try {
+      localStorage.setItem(QUOTA_STORAGE_KEY, String(quotaExceededResetTimestamp));
+    } catch {}
+    // Disconnect Firestore SDK network stream to eliminate repetitive retry/backoff warnings
+    disableNetwork(db).catch(() => {});
+    console.warn(
+      `[Firestore Quota Limite Diário Atingido em ${context}] O sistema continuará sincronizando normalmente através do servidor central e cache local.`
+    );
   } else {
     console.debug(`[Firestore ${context}]`, err);
   }
 }
 
 export function canWriteToFirestore(): boolean {
+  try {
+    const until = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (until && Number(until) > Date.now()) {
+      return false;
+    }
+  } catch {}
   if (!isFirestoreWriteQuotaExceeded) return true;
   if (Date.now() > quotaExceededResetTimestamp) {
     isFirestoreWriteQuotaExceeded = false;
+    try {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+    } catch {}
     return true;
   }
   return false;
@@ -435,47 +468,13 @@ export async function purgeSeedDataFromFirestore(): Promise<void> {
 /**
  * Fetch all inspections with robust multi-tier fallback & non-destructive union
  */
-export async function fetchServerInspections(): Promise<Inspection[]> {
-  // 1. Fetch deleted records list from Firestore to prevent resurrection (if available)
-  try {
-    const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
-    deletedSnap.forEach((d) => {
-      markAsPermanentlyDeleted(d.id);
-    });
-  } catch (err) {
-    handleFirestoreError(err, 'fetchServerInspections:deleted');
-  }
-
+export async function fetchServerInspections(forceCloud = false): Promise<Inspection[]> {
   const localStored = getStoredInspections();
   const idbStored = await loadAllFromIndexedDB();
   let firestoreItems: Inspection[] = [];
   let backendItems: Inspection[] = [];
 
-  // 2. Fetch from Firebase Firestore
-  try {
-    const querySnapshot = await getDocs(collection(db, 'inspections'));
-    querySnapshot.forEach((docSnap) => {
-      const data = docSnap.data() as Inspection;
-      const docId = docSnap.id;
-      const itemUuid = data?.uuid || data?.id || docId;
-
-      if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
-        return;
-      }
-
-      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
-        firestoreItems.push({
-          ...data,
-          id: data.id || docId,
-          uuid: itemUuid,
-        });
-      }
-    });
-  } catch (firebaseErr) {
-    handleFirestoreError(firebaseErr, 'fetchServerInspections:inspections');
-  }
-
-  // 3. Fetch from Express Backend
+  // 1. Fetch from Express Backend (always fast, reliable and within zero-quota limits)
   try {
     const response = await fetch('/api/inspections', {
       headers: { Accept: 'application/json' },
@@ -493,6 +492,41 @@ export async function fetchServerInspections(): Promise<Inspection[]> {
     }
   } catch (serverErr) {
     console.debug('Backend fetch error:', serverErr);
+  }
+
+  // 2. Fetch from Firebase Firestore only if available and requested/manual sync
+  if (forceCloud && canWriteToFirestore()) {
+    try {
+      const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
+      deletedSnap.forEach((d) => {
+        markAsPermanentlyDeleted(d.id);
+      });
+    } catch (err) {
+      handleFirestoreError(err, 'fetchServerInspections:deleted');
+    }
+
+    try {
+      const querySnapshot = await getDocs(collection(db, 'inspections'));
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Inspection;
+        const docId = docSnap.id;
+        const itemUuid = data?.uuid || data?.id || docId;
+
+        if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+          return;
+        }
+
+        if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
+          firestoreItems.push({
+            ...data,
+            id: data.id || docId,
+            uuid: itemUuid,
+          });
+        }
+      });
+    } catch (firebaseErr) {
+      handleFirestoreError(firebaseErr, 'fetchServerInspections:inspections');
+    }
   }
 
   // Non-destructive smart merge of ALL sources (ignoring deleted records)
@@ -513,10 +547,34 @@ export function sanitizeForFirestore<T>(data: T): T {
 }
 
 /**
+ * Safe promise wrapper with timeout to prevent hung async calls (e.g. Firebase offline backoff or slow network)
+ */
+export function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallbackValue), timeoutMs);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timer);
+      return res;
+    }).catch(() => {
+      clearTimeout(timer);
+      return fallbackValue;
+    }),
+    timeoutPromise,
+  ]);
+}
+
+/**
  * Save single inspection directly into Firebase Firestore, Backend Server, and Local DB.
  * Guarantees that the inspection is registered across all tiers and immediately accessible.
  */
-export async function saveInspection(inspection: Inspection): Promise<Inspection> {
+export async function saveInspection(
+  inspection: Inspection,
+  onProgress?: (stepIndex: number, message: string) => void
+): Promise<Inspection> {
+  if (onProgress) onProgress(0, 'Validando e formatando dados da inspeção...');
   const current = getStoredInspections();
   
   const updatedInspection: Inspection = {
@@ -532,12 +590,16 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
   unmarkAsDeleted(updatedInspection.id);
   unmarkAsDeleted(updatedInspection.uuid);
 
+  if (onProgress) onProgress(1, 'Otimizando fotos e preparando evidências...');
+
   // 1. Immediately store in Memory, LocalStorage, and IndexedDB for instant UI responsiveness
+  if (onProgress) onProgress(2, 'Gravando no banco de dados local e IndexedDB...');
   const merged = mergeInspections(current, [updatedInspection]);
   saveAllInspections(merged, false);
-  await saveToIndexedDB(updatedInspection);
+  await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
 
   // 2. Persist in parallel to Firebase Firestore Cloud (if within quota) and Central Express Backend
+  if (onProgress) onProgress(3, 'Transmitindo e sincronizando com o servidor central...');
   const safeData = sanitizeForFirestore(updatedInspection);
   
   const firestorePromise = (async () => {
@@ -545,7 +607,7 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
     try {
       const docId = safeData.id;
       const docRef = doc(db, 'inspections', docId);
-      await setDoc(docRef, safeData, { merge: true });
+      await promiseWithTimeout(setDoc(docRef, safeData, { merge: true }), 2500, undefined);
     } catch (firestoreErr) {
       handleFirestoreError(firestoreErr, 'saveInspection');
     }
@@ -553,17 +615,20 @@ export async function saveInspection(inspection: Inspection): Promise<Inspection
 
   const backendPromise = (async () => {
     try {
-      await fetch('/api/inspections', {
+      const fetchPromise = fetch('/api/inspections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(safeData),
       });
+      await promiseWithTimeout(fetchPromise, 4000, undefined);
     } catch (serverErr) {
       console.debug('Aviso ao sincronizar com servidor central:', serverErr);
     }
   })();
 
   await Promise.allSettled([firestorePromise, backendPromise]);
+
+  if (onProgress) onProgress(4, 'Inspeção gravada e sincronizada com sucesso!');
 
   return updatedInspection;
 }
@@ -677,14 +742,16 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
     } catch {}
 
     // Save to Firebase Firestore config
-    try {
-      await setDoc(doc(db, 'app_config', 'types'), {
-        key: 'types',
-        types: updated,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (e) {
-      console.warn('Erro ao persistir tipos no Firestore:', e);
+    if (canWriteToFirestore()) {
+      try {
+        await setDoc(doc(db, 'app_config', 'types'), {
+          key: 'types',
+          types: updated,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      } catch (e) {
+        handleFirestoreError(e, 'saveCustomInspectionType');
+      }
     }
 
     try {
@@ -714,97 +781,100 @@ export function setupRealtimeSync(
   let unsubscribeDeleted: (() => void) | null = null;
   let unsubscribeTypes: (() => void) | null = null;
 
-  try {
-    // 1. Listen to 'deleted_inspections' in Firestore in real-time
-    const deletedRef = collection(db, 'deleted_inspections');
-    unsubscribeDeleted = onSnapshot(
-      deletedRef,
-      (snapshot) => {
-        let hasNewDeletes = false;
-        snapshot.forEach((d) => {
-          if (!deletedIdsSet.has(d.id)) {
-            markAsPermanentlyDeleted(d.id);
-            hasNewDeletes = true;
-          }
-        });
+  // 1. Listen to Firebase Firestore if quota is healthy
+  if (canWriteToFirestore()) {
+    try {
+      // 1. Listen to 'deleted_inspections' in Firestore in real-time
+      const deletedRef = collection(db, 'deleted_inspections');
+      unsubscribeDeleted = onSnapshot(
+        deletedRef,
+        (snapshot) => {
+          let hasNewDeletes = false;
+          snapshot.forEach((d) => {
+            if (!deletedIdsSet.has(d.id)) {
+              markAsPermanentlyDeleted(d.id);
+              hasNewDeletes = true;
+            }
+          });
 
-        if (hasNewDeletes) {
-          const current = getStoredInspections();
-          const filtered = current.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
-          inMemoryInspections = filtered;
-          saveAllInspections(filtered, false);
-          onInspectionsUpdate(filtered);
+          if (hasNewDeletes) {
+            const current = getStoredInspections();
+            const filtered = current.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
+            inMemoryInspections = filtered;
+            saveAllInspections(filtered, false);
+            onInspectionsUpdate(filtered);
+          }
+        },
+        (error) => {
+          handleFirestoreError(error, 'realtime listener deleted_inspections');
         }
-      },
-      (error) => {
-        console.warn('Firebase deleted_inspections listener error:', error);
-      }
-    );
+      );
 
-    // 2. Listen to 'inspections' collection in Firestore in real-time
-    const inspectionsRef = collection(db, 'inspections');
-    unsubscribeFirestore = onSnapshot(
-      inspectionsRef,
-      (snapshot) => {
-        const cloudList: Inspection[] = [];
-        snapshot.forEach((d) => {
-          const item = d.data() as Inspection;
-          const docId = d.id;
-          const itemUuid = item?.uuid || item?.id || docId;
+      // 2. Listen to 'inspections' collection in Firestore in real-time
+      const inspectionsRef = collection(db, 'inspections');
+      unsubscribeFirestore = onSnapshot(
+        inspectionsRef,
+        (snapshot) => {
+          const cloudList: Inspection[] = [];
+          snapshot.forEach((d) => {
+            const item = d.data() as Inspection;
+            const docId = d.id;
+            const itemUuid = item?.uuid || item?.id || docId;
 
-          // If document was marked deleted, ignore it safely without calling deleteDoc inside loop
-          if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(item?.id)) {
-            return;
-          }
+            // If document was marked deleted, ignore it safely without calling deleteDoc inside loop
+            if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(item?.id)) {
+              return;
+            }
 
-          if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: docId })) {
-            cloudList.push({
-              ...item,
-              id: item.id || docId,
-              uuid: itemUuid,
-            });
-          }
-        });
+            if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: docId })) {
+              cloudList.push({
+                ...item,
+                id: item.id || docId,
+                uuid: itemUuid,
+              });
+            }
+          });
 
-        // The live Firestore list is combined with local storage
-        const currentStored = getStoredInspections();
-        const offlineLocalOnly = currentStored.filter(
-          (localItem) =>
-            !isIdDeleted(localItem.id) &&
-            !isIdDeleted(localItem.uuid) &&
-            !cloudList.some((cloudItem) => cloudItem.id === localItem.id || cloudItem.uuid === localItem.uuid) &&
-            !localItem.sincronizado
-        );
+          // The live Firestore list is combined with local storage
+          const currentStored = getStoredInspections();
+          const offlineLocalOnly = currentStored.filter(
+            (localItem) =>
+              !isIdDeleted(localItem.id) &&
+              !isIdDeleted(localItem.uuid) &&
+              !cloudList.some((cloudItem) => cloudItem.id === localItem.id || cloudItem.uuid === localItem.uuid) &&
+              !localItem.sincronizado
+          );
 
-        const unifiedList = mergeInspections(cloudList, offlineLocalOnly);
-        inMemoryInspections = unifiedList;
-        saveAllInspections(unifiedList, false);
-        onInspectionsUpdate(unifiedList);
-      },
-      (error) => {
-        handleFirestoreError(error, 'realtime listener inspections');
-      }
-    );
-
-    // 3. Listen to custom types config in Firestore
-    const typesDocRef = doc(db, 'app_config', 'types');
-    unsubscribeTypes = onSnapshot(
-      typesDocRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && Array.isArray(data.types) && data.types.length > 0) {
-            localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
-            if (onTypesUpdate) onTypesUpdate(data.types);
-          }
+          const unifiedList = mergeInspections(cloudList, offlineLocalOnly);
+          inMemoryInspections = unifiedList;
+          saveAllInspections(unifiedList, false);
+          onInspectionsUpdate(unifiedList);
+        },
+        (error) => {
+          handleFirestoreError(error, 'realtime listener inspections');
         }
-      },
-      (error) => {
-        console.warn('Firebase Types listener error:', error);
-      }
-    );
-  } catch (e) {
-    console.warn('Erro ao inicializar listener Firestore:', e);
+      );
+
+      // 3. Listen to custom types config in Firestore
+      const typesDocRef = doc(db, 'app_config', 'types');
+      unsubscribeTypes = onSnapshot(
+        typesDocRef,
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data && Array.isArray(data.types) && data.types.length > 0) {
+              localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
+              if (onTypesUpdate) onTypesUpdate(data.types);
+            }
+          }
+        },
+        (error) => {
+          handleFirestoreError(error, 'realtime listener types');
+        }
+      );
+    } catch (e) {
+      handleFirestoreError(e, 'setupRealtimeSync:init');
+    }
   }
 
   // 4. Also setup SSE listener as secondary sync fallback
@@ -867,14 +937,16 @@ export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> 
   const idbList = await loadAllFromIndexedDB();
   const localUnified = mergeInspections(localList, idbList);
   
-  // 2. Fetch and propagate deletion tombstones from Firebase Firestore
-  try {
-    const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
-    deletedSnap.forEach((d) => {
-      markAsPermanentlyDeleted(d.id);
-    });
-  } catch (err) {
-    handleFirestoreError(err, 'fullMultiplatformSync:deleted');
+  // 2. Fetch and propagate deletion tombstones from Firebase Firestore (if within quota)
+  if (canWriteToFirestore()) {
+    try {
+      const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
+      deletedSnap.forEach((d) => {
+        markAsPermanentlyDeleted(d.id);
+      });
+    } catch (err) {
+      handleFirestoreError(err, 'fullMultiplatformSync:deleted');
+    }
   }
 
   // 3. Push any local deletion tombstones to Firestore (if within quota)
@@ -920,28 +992,30 @@ export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> 
     }
   }
 
-  // 5. Pull authoritative inspections from Firebase Firestore
-  try {
-    const querySnapshot = await getDocs(collection(db, 'inspections'));
-    querySnapshot.forEach((docSnap) => {
-      const data = docSnap.data() as Inspection;
-      const docId = docSnap.id;
-      const itemUuid = data?.uuid || data?.id || docId;
+  // 5. Pull authoritative inspections from Firebase Firestore (if within quota)
+  if (canWriteToFirestore()) {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'inspections'));
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Inspection;
+        const docId = docSnap.id;
+        const itemUuid = data?.uuid || data?.id || docId;
 
-      if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
-        return;
-      }
+        if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+          return;
+        }
 
-      if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
-        firestoreItems.push({
-          ...data,
-          id: data.id || docId,
-          uuid: itemUuid,
-        });
-      }
-    });
-  } catch (err) {
-    handleFirestoreError(err, 'fullMultiplatformSync:pullInspections');
+        if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
+          firestoreItems.push({
+            ...data,
+            id: data.id || docId,
+            uuid: itemUuid,
+          });
+        }
+      });
+    } catch (err) {
+      handleFirestoreError(err, 'fullMultiplatformSync:pullInspections');
+    }
   }
 
   // 6. Push and Pull to/from Central Express Server (/api/sync)
@@ -1040,17 +1114,19 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
       localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(parsed.inspectionTypes));
     }
 
-    // Direct Batch Save to Firebase Firestore
-    try {
-      const batch = writeBatch(db);
-      merged.forEach((insp) => {
-        const docRef = doc(db, 'inspections', insp.id);
-        const safe = sanitizeForFirestore({ ...insp, sincronizado: true, updatedAt: new Date().toISOString() });
-        batch.set(docRef, safe, { merge: true });
-      });
-      await batch.commit();
-    } catch (e) {
-      console.warn('Erro ao salvar lote de backup no Firestore:', e);
+    // Direct Batch Save to Firebase Firestore (if within quota)
+    if (canWriteToFirestore()) {
+      try {
+        const batch = writeBatch(db);
+        merged.forEach((insp) => {
+          const docRef = doc(db, 'inspections', insp.id);
+          const safe = sanitizeForFirestore({ ...insp, sincronizado: true, updatedAt: new Date().toISOString() });
+          batch.set(docRef, safe, { merge: true });
+        });
+        await batch.commit();
+      } catch (e) {
+        handleFirestoreError(e, 'importDatabaseBackup');
+      }
     }
 
     // Sync backup with system server

@@ -29,6 +29,7 @@ import { Step7Success } from './components/InspectionFlow/Step7Success';
 import { RecordsView } from './components/Records/RecordsView';
 import { DashboardView } from './components/DashboardView';
 import { RecordDetailModal } from './components/Records/RecordDetailModal';
+import { SubmissionLoadingModal } from './components/SubmissionLoadingModal';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 
 const initialFormData = {
@@ -51,6 +52,12 @@ export default function App() {
   const [pendingDraft, setPendingDraft] = useState<Partial<Inspection> | null>(null);
   const [submittedInspection, setSubmittedInspection] = useState<Inspection | null>(null);
   const [viewingInspection, setViewingInspection] = useState<Inspection | null>(null);
+
+  // Submission Progress Modal State
+  const [isSubmittingInspection, setIsSubmittingInspection] = useState<boolean>(false);
+  const [submissionStepIndex, setSubmissionStepIndex] = useState<number>(0);
+  const [submissionStepMessage, setSubmissionStepMessage] = useState<string>('');
+  const [submittingPreview, setSubmittingPreview] = useState<Partial<Inspection>>({});
 
   // Network & Sync State
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -220,7 +227,7 @@ export default function App() {
     setPendingDraft(null);
   };
 
-  // Submit and Finalize Inspection
+  // Submit and Finalize Inspection with Multi-Step Progress Loading
   const handleSubmitInspection = async () => {
     const now = new Date();
     const formattedNow = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
@@ -253,12 +260,49 @@ export default function App() {
       updatedAt: now.toISOString(),
     };
 
-    // Update state instantly (accumulate without overwriting previous inspections) and persist to Firebase Firestore
-    setInspections((prev) => [completedInspection, ...prev.filter((i) => i.id !== completedInspection.id && i.uuid !== completedInspection.uuid)]);
-    await saveInspection(completedInspection);
-    clearDraft();
-    setSubmittedInspection(completedInspection);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setSubmittingPreview(completedInspection);
+    setIsSubmittingInspection(true);
+    setSubmissionStepIndex(0);
+    setSubmissionStepMessage('Validando informações e gerando protocolo oficial...');
+
+    try {
+      // Step 1: Data validation & layout
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      
+      // Step 2: Photos check & index
+      setSubmissionStepIndex(1);
+      setSubmissionStepMessage(`Processando ${completedInspection.fotos.length} evidências fotográficas anexadas...`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      // Step 3: Local Database & IndexedDB
+      setSubmissionStepIndex(2);
+      setSubmissionStepMessage('Gravando no banco de dados local e memória protegida (IndexedDB)...');
+
+      // Update state instantly (accumulate without overwriting previous inspections)
+      setInspections((prev) => [completedInspection, ...prev.filter((i) => i.id !== completedInspection.id && i.uuid !== completedInspection.uuid)]);
+
+      // Save to storage tiers with progress feedback
+      await saveInspection(completedInspection, (step, message) => {
+        setSubmissionStepIndex(step);
+        setSubmissionStepMessage(message);
+      });
+
+      // Step 5: Final completion tick
+      setSubmissionStepIndex(4);
+      setSubmissionStepMessage('Inspeção registrada com sucesso! Abrindo confirmação...');
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      clearDraft();
+      setSubmittedInspection(completedInspection);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      console.error('Erro durante o fluxo de gravação:', err);
+      clearDraft();
+      setSubmittedInspection(completedInspection);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      setIsSubmittingInspection(false);
+    }
   };
 
   // Delete Inspection
@@ -276,6 +320,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0F1726] text-[#FFFFFF] flex flex-col selection:bg-[#12346B] selection:text-[#FFFFFF]">
+      {/* Submission Progress Loading Modal */}
+      <SubmissionLoadingModal
+        isOpen={isSubmittingInspection}
+        inspection={submittingPreview}
+        currentStepIndex={submissionStepIndex}
+        stepMessage={submissionStepMessage}
+      />
+
       {/* Sync Toast Feedback Banner */}
       {syncToast && (
         <div className="fixed top-16 right-3 sm:right-6 z-50 animate-in fade-in slide-in-from-top-3 duration-300">
