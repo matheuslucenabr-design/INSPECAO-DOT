@@ -101,27 +101,35 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Online / Offline status badge */}
           <div
-            className={`hidden xs:flex items-center gap-1 sm:gap-1.5 px-2 py-1 text-[11px] sm:text-xs font-semibold border ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] sm:text-xs font-bold border transition-colors ${
               !isOnline
                 ? 'bg-[#0F1726] border-rose-800 text-rose-300'
-                : 'bg-[#0F1726] border-emerald-500/40 text-emerald-300'
+                : isSyncing
+                ? 'bg-[#0F1726] border-amber-500/50 text-amber-300'
+                : 'bg-[#0F1726] border-emerald-500/50 text-emerald-300'
             }`}
             title={
               !isOnline
-                ? 'Operando offline temporariamente (alterações serão sincronizadas com o servidor ao reconectar)'
-                : 'Servidor Central Unificado Conectado em Tempo Real (todas as plataformas e dispositivos integrados)'
+                ? 'Servidor Offline - Modo local ativo'
+                : isSyncing
+                ? 'Sincronizando dados com o servidor central...'
+                : `Servidor Central Online - Sincronizado ${lastSyncTime ? `(Última sync: ${lastSyncTime})` : ''}`
             }
           >
             {!isOnline ? (
               <>
-                <WifiOff className="w-3 h-3 text-rose-400" />
-                <span className="hidden sm:inline">Offline</span>
+                <span className="w-2 h-2 bg-rose-500 rounded-full" />
+                <span className="font-bold">SERVIDOR OFFLINE</span>
+              </>
+            ) : isSyncing ? (
+              <>
+                <span className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
+                <span className="font-bold">SINCRONIZANDO...</span>
               </>
             ) : (
               <>
-                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                <span className="hidden sm:inline font-medium">Servidor Unificado</span>
-                <span className="sm:hidden font-medium">Servidor</span>
+                <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                <span className="font-bold">SERVIDOR ONLINE</span>
               </>
             )}
           </div>

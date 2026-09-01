@@ -29,6 +29,7 @@ interface RecordsViewProps {
   onSync?: () => void;
   isSyncing?: boolean;
   lastSyncTime?: string;
+  isOnline?: boolean;
 }
 
 export const RecordsView: React.FC<RecordsViewProps> = ({
@@ -39,6 +40,7 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
   onSync,
   isSyncing,
   lastSyncTime,
+  isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -202,13 +204,41 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
       <div className="space-y-2.5 sm:space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-base sm:text-2xl font-black text-[#FFFFFF] tracking-tight">
                 REGISTROS DE INSPEÇÃO
               </h1>
-              <span className="px-1.5 py-0.5 bg-[#0F1726] border border-emerald-500/40 text-emerald-300 text-[9px] sm:text-[10px] font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" /> Servidor Unificado Ativo
-              </span>
+              <div
+                className={`px-2 py-0.5 border text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 ${
+                  !isOnline
+                    ? 'bg-[#0F1726] border-rose-800 text-rose-300'
+                    : isSyncing
+                    ? 'bg-[#0F1726] border-amber-500/50 text-amber-300'
+                    : 'bg-[#0F1726] border-emerald-500/50 text-emerald-300'
+                }`}
+              >
+                {!isOnline ? (
+                  <>
+                    <span className="w-2 h-2 bg-rose-500 rounded-full" />
+                    <span>SERVIDOR OFFLINE</span>
+                  </>
+                ) : isSyncing ? (
+                  <>
+                    <span className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
+                    <span>SINCRONIZANDO...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                    <span>SERVIDOR ONLINE</span>
+                  </>
+                )}
+              </div>
+              {lastSyncTime && (
+                <span className="text-[10px] sm:text-[11px] text-[#A7B0C2] font-mono">
+                  Última sincronização: {lastSyncTime}
+                </span>
+              )}
             </div>
             <p className="text-[10px] sm:text-xs text-[#A7B0C2] mt-0.5">
               Consulte, filtre e exporte todas as inspeções salvas e sincronizadas em tempo real em todas as plataformas.

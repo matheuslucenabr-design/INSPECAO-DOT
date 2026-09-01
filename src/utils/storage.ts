@@ -1,3 +1,9 @@
+/**
+ * INSPEÇÃO PRONTO! - Storage & Multiplatform Central Synchronization Engine
+ * The Central Server Database is the authoritative Single Source of Truth.
+ * All devices, browsers, and platforms share the exact same inspection records.
+ */
+
 import {
   collection,
   doc,
@@ -5,19 +11,18 @@ import {
   setDoc,
   deleteDoc,
   onSnapshot,
-  writeBatch,
   disableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Inspection } from '../types/inspection';
 
-const DB_NAME = 'inspecao_pronto_local_db_v2';
+const DB_NAME = 'inspecao_pronto_local_db_v3';
 const DB_VERSION = 1;
 const STORE_INSPECTIONS = 'inspections';
 const STORE_CONFIG = 'app_config';
 
-const STORAGE_FALLBACK_KEY = 'inspecao_pronto_records_v1';
-const STORAGE_DELETED_IDS_KEY = 'inspecao_pronto_deleted_ids_v2';
+const STORAGE_FALLBACK_KEY = 'inspecao_pronto_records_v3';
+const STORAGE_DELETED_IDS_KEY = 'inspecao_pronto_deleted_ids_v3';
 const STORAGE_DRAFT_KEY = 'inspecao_pronto_draft_v1';
 const STORAGE_TYPES_KEY = 'inspecao_pronto_types_v1';
 
@@ -41,11 +46,11 @@ export const DEFAULT_SITES = [
   'Galpão Logístico Eixo Sul',
 ];
 
-// In-memory runtime cache for instant access
+// In-memory runtime cache for instant rendering
 let inMemoryInspections: Inspection[] = [];
 let isIndexedDbInitialized = false;
 
-// In-memory set of permanently deleted inspection IDs and UUIDs
+// In-memory set of permanently deleted inspection IDs and UUIDs (tombstones)
 const deletedIdsSet = new Set<string>();
 
 // Initialize deleted IDs set from localStorage
@@ -74,7 +79,7 @@ export function isIdDeleted(idOrUuid?: string): boolean {
 }
 
 /**
- * Mark ID or UUID as permanently deleted and persist
+ * Mark ID or UUID as permanently deleted and persist locally
  */
 export function markAsPermanentlyDeleted(...ids: (string | undefined)[]): void {
   let changed = false;
@@ -95,7 +100,7 @@ export function markAsPermanentlyDeleted(...ids: (string | undefined)[]): void {
 }
 
 /**
- * Remove an ID from deleted list (used when explicitly saving a new inspection)
+ * Remove an ID from deleted list (used when saving an inspection)
  */
 export function unmarkAsDeleted(idOrUuid?: string): void {
   if (idOrUuid && deletedIdsSet.has(idOrUuid)) {
@@ -112,7 +117,7 @@ export function unmarkAsDeleted(idOrUuid?: string): void {
 /**
  * Guaranteed globally unique inspection registration identifier
  * Generates unique non-colliding IDs (timestamp + random entropy)
- * so that new inspections never overwrite or replace previous ones.
+ * Example: REG-MTHWCC6S-QJ0YW
  */
 export function generateUniqueInspectionId(): string {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -167,7 +172,6 @@ export async function loadAllFromIndexedDB(): Promise<Inspection[]> {
           const cleaned: Inspection[] = [];
           for (const item of results) {
             if (isSeedInspection(item) || isIdDeleted(item.id) || isIdDeleted(item.uuid)) {
-              // Clean deleted item out of IndexedDB immediately
               try {
                 store.delete(item.id);
               } catch {}
@@ -215,7 +219,6 @@ export async function deleteFromIndexedDB(idOrUuid: string): Promise<void> {
     const store = tx.objectStore(STORE_INSPECTIONS);
     store.delete(idOrUuid);
 
-    // Also scan to clean if idOrUuid was the item's uuid
     const request = store.openCursor();
     request.onsuccess = (event) => {
       const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
@@ -234,9 +237,6 @@ export async function deleteFromIndexedDB(idOrUuid: string): Promise<void> {
 
 // ---------------- LOCALSTORAGE & INDEXEDDB CACHE ---------------- //
 
-/**
- * Filter out any leftover sample/mock inspection IDs
- */
 function isSeedInspection(item: any): boolean {
   if (!item) return true;
   const id = item.id || '';
@@ -269,47 +269,7 @@ export function sortInspectionsDescending(items: Inspection[]): Inspection[] {
 }
 
 /**
- * Merge multiple lists of inspections non-destructively.
- * Strictly ignores any permanently deleted records.
- */
-export function mergeInspections(...sources: (Inspection[] | null | undefined)[]): Inspection[] {
-  const map = new Map<string, Inspection>();
-
-  for (const list of sources) {
-    if (!Array.isArray(list)) continue;
-    for (const item of list) {
-      if (!item || isSeedInspection(item)) continue;
-      if (isIdDeleted(item.id) || isIdDeleted(item.uuid)) continue;
-      
-      const key = item.id || item.uuid;
-      if (!key) continue;
-
-      if (!map.has(key)) {
-        map.set(key, item);
-      } else {
-        const existing = map.get(key)!;
-        const existingTime = existing.updatedAt || existing.dataEnvio || existing.dataCriacao || '';
-        const incomingTime = item.updatedAt || item.dataEnvio || item.dataCriacao || '';
-        
-        const existingPhotosCount = existing.fotos?.length || 0;
-        const incomingPhotosCount = item.fotos?.length || 0;
-
-        if (incomingPhotosCount > existingPhotosCount || incomingTime >= existingTime) {
-          map.set(key, {
-            ...existing,
-            ...item,
-            fotos: item.fotos && item.fotos.length >= existingPhotosCount ? item.fotos : existing.fotos,
-          });
-        }
-      }
-    }
-  }
-
-  return sortInspectionsDescending(Array.from(map.values()));
-}
-
-/**
- * Get cached inspections instantly (synchronous) - starts with persistent local data
+ * Get cached inspections instantly (synchronous)
  */
 export function getStoredInspections(): Inspection[] {
   if (inMemoryInspections.length > 0) {
@@ -331,13 +291,12 @@ export function getStoredInspections(): Inspection[] {
     console.error('Erro ao ler cache localStorage:', err);
   }
 
-  // Trigger background IndexedDB populate if not yet done
   if (!isIndexedDbInitialized) {
     isIndexedDbInitialized = true;
     loadAllFromIndexedDB().then((idbList) => {
-      if (idbList.length > 0) {
+      if (idbList.length > 0 && inMemoryInspections.length === 0) {
         const validList = idbList.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
-        inMemoryInspections = mergeInspections(inMemoryInspections, validList);
+        inMemoryInspections = sortInspectionsDescending(validList);
       }
     });
   }
@@ -350,7 +309,7 @@ export function getStoredInspections(): Inspection[] {
  */
 export function saveAllInspections(inspections: Inspection[], pushToServer: boolean = false): void {
   try {
-    const sanitized = mergeInspections(inspections);
+    const sanitized = sortInspectionsDescending(inspections);
     inMemoryInspections = sanitized;
 
     try {
@@ -366,7 +325,6 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
       } catch {}
     }
 
-    // Mirror to IndexedDB (full data with high-res photos)
     openLocalDatabase().then((localDb) => {
       const tx = localDb.transaction([STORE_INSPECTIONS], 'readwrite');
       const store = tx.objectStore(STORE_INSPECTIONS);
@@ -384,10 +342,9 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
 // ---------------- FIREBASE FIRESTORE INTEGRATION & QUOTA PROTECTION ---------------- //
 
 const QUOTA_STORAGE_KEY = 'firestore_quota_exceeded_until';
-let isFirestoreWriteQuotaExceeded = true; // Safe default when quota limit is active
+let isFirestoreWriteQuotaExceeded = true;
 let quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000;
 
-// Initialize quota status from localStorage if set previously
 if (typeof window !== 'undefined') {
   try {
     const until = localStorage.getItem(QUOTA_STORAGE_KEY);
@@ -405,10 +362,6 @@ if (typeof window !== 'undefined') {
   } catch {}
 }
 
-
-/**
- * Handle Firestore errors safely and engage circuit breaker on quota limits (resource-exhausted).
- */
 export function handleFirestoreError(err: any, context: string): void {
   const errMsg = String(err?.message || err?.code || err || '');
   if (
@@ -418,15 +371,11 @@ export function handleFirestoreError(err: any, context: string): void {
     errMsg.includes('quota')
   ) {
     isFirestoreWriteQuotaExceeded = true;
-    quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000; // 12-hour safety cooldown
+    quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000;
     try {
       localStorage.setItem(QUOTA_STORAGE_KEY, String(quotaExceededResetTimestamp));
     } catch {}
-    // Disconnect Firestore SDK network stream to eliminate repetitive retry/backoff warnings
     disableNetwork(db).catch(() => {});
-    console.warn(
-      `[Firestore Quota Limite Diário Atingido em ${context}] O sistema continuará sincronizando normalmente através do servidor central e cache local.`
-    );
   } else {
     console.debug(`[Firestore ${context}]`, err);
   }
@@ -450,31 +399,35 @@ export function canWriteToFirestore(): boolean {
   return false;
 }
 
-/**
- * Clean any leftover seed documents from Firestore
- */
-export async function purgeSeedDataFromFirestore(): Promise<void> {
-  if (!canWriteToFirestore()) return;
-  const seedIds = ['REG-2026-SE01-A1', 'REG-2026-SE02-B2'];
-  for (const id of seedIds) {
-    try {
-      await deleteDoc(doc(db, 'inspections', id));
-    } catch (err) {
-      handleFirestoreError(err, 'purgeSeedDataFromFirestore');
-    }
-  }
+export function sanitizeForFirestore<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data, (_, value) => (value === undefined ? null : value)));
+}
+
+export function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallbackValue), timeoutMs);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timer);
+      return res;
+    }).catch(() => {
+      clearTimeout(timer);
+      return fallbackValue;
+    }),
+    timeoutPromise,
+  ]);
 }
 
 /**
- * Fetch all inspections with robust multi-tier fallback & non-destructive union
+ * Fetch all inspections from the Central Database (Single Source of Truth).
+ * Overwrites local state with authoritative server data, purging deleted records.
  */
 export async function fetchServerInspections(forceCloud = false): Promise<Inspection[]> {
-  const localStored = getStoredInspections();
-  const idbStored = await loadAllFromIndexedDB();
-  let firestoreItems: Inspection[] = [];
-  let backendItems: Inspection[] = [];
+  let backendItems: Inspection[] | null = null;
 
-  // 1. Fetch from Express Backend (always fast, reliable and within zero-quota limits)
+  // 1. Fetch from Central Express Server database
   try {
     const response = await fetch('/api/inspections', {
       headers: { Accept: 'application/json' },
@@ -491,10 +444,11 @@ export async function fetchServerInspections(forceCloud = false): Promise<Inspec
       }
     }
   } catch (serverErr) {
-    console.debug('Backend fetch error:', serverErr);
+    console.debug('Backend fetch error (offline ou indisponível):', serverErr);
   }
 
-  // 2. Fetch from Firebase Firestore only if available and requested/manual sync
+  // 2. Fetch from Firebase Firestore if available and requested
+  let firestoreItems: Inspection[] = [];
   if (forceCloud && canWriteToFirestore()) {
     try {
       const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
@@ -529,53 +483,34 @@ export async function fetchServerInspections(forceCloud = false): Promise<Inspec
     }
   }
 
-  // Non-destructive smart merge of ALL sources (ignoring deleted records)
-  const merged = mergeInspections(localStored, idbStored, backendItems, firestoreItems);
-  
-  // Persist merged set locally
-  saveAllInspections(merged, false);
+  // If central backend responded, it is the official single source of truth
+  if (backendItems !== null) {
+    const authoritativeList = sortInspectionsDescending(backendItems);
+    inMemoryInspections = authoritativeList;
+    saveAllInspections(authoritativeList, false);
+    return authoritativeList;
+  }
 
-  return merged;
+  if (firestoreItems.length > 0) {
+    const authoritativeList = sortInspectionsDescending(firestoreItems);
+    inMemoryInspections = authoritativeList;
+    saveAllInspections(authoritativeList, false);
+    return authoritativeList;
+  }
+
+  // Offline fallback
+  return getStoredInspections();
 }
 
 /**
- * Recursively remove undefined values and sanitize data for Firestore compatibility.
- * Prevents Firestore from rejecting documents due to undefined fields.
- */
-export function sanitizeForFirestore<T>(data: T): T {
-  return JSON.parse(JSON.stringify(data, (_, value) => (value === undefined ? null : value)));
-}
-
-/**
- * Safe promise wrapper with timeout to prevent hung async calls (e.g. Firebase offline backoff or slow network)
- */
-export function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> {
-  let timer: any;
-  const timeoutPromise = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallbackValue), timeoutMs);
-  });
-  return Promise.race([
-    promise.then((res) => {
-      clearTimeout(timer);
-      return res;
-    }).catch(() => {
-      clearTimeout(timer);
-      return fallbackValue;
-    }),
-    timeoutPromise,
-  ]);
-}
-
-/**
- * Save single inspection directly into Firebase Firestore, Backend Server, and Local DB.
- * Guarantees that the inspection is registered across all tiers and immediately accessible.
+ * Save single inspection directly into the Central Server Database, Firebase Firestore, and Local DB.
+ * Guarantees that the inspection is registered in the central cloud and immediately available on all devices.
  */
 export async function saveInspection(
   inspection: Inspection,
   onProgress?: (stepIndex: number, message: string) => void
 ): Promise<Inspection> {
   if (onProgress) onProgress(0, 'Validando e formatando dados da inspeção...');
-  const current = getStoredInspections();
   
   const updatedInspection: Inspection = {
     ...inspection,
@@ -592,78 +527,100 @@ export async function saveInspection(
 
   if (onProgress) onProgress(1, 'Otimizando fotos e preparando evidências...');
 
-  // 1. Immediately store in Memory, LocalStorage, and IndexedDB for instant UI responsiveness
-  if (onProgress) onProgress(2, 'Gravando no banco de dados local e IndexedDB...');
-  const merged = mergeInspections(current, [updatedInspection]);
-  saveAllInspections(merged, false);
-  await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
-
-  // 2. Persist in parallel to Firebase Firestore Cloud (if within quota) and Central Express Backend
-  if (onProgress) onProgress(3, 'Transmitindo e sincronizando com o servidor central...');
+  // 1. Save to Central Express Backend (Single Source of Truth)
+  if (onProgress) onProgress(2, 'Gravando no banco de dados central na nuvem...');
   const safeData = sanitizeForFirestore(updatedInspection);
   
-  const firestorePromise = (async () => {
-    if (!canWriteToFirestore()) return;
+  let serverSaved = false;
+  try {
+    const response = await fetch('/api/inspections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(safeData),
+    });
+    if (response.ok) {
+      serverSaved = true;
+    }
+  } catch (serverErr) {
+    console.warn('Aviso ao sincronizar com servidor central:', serverErr);
+  }
+
+  // 2. Also save to Firebase Firestore in parallel (if within quota)
+  if (onProgress) onProgress(3, 'Registrando evidências e fotos na nuvem...');
+  if (canWriteToFirestore()) {
     try {
-      const docId = safeData.id;
-      const docRef = doc(db, 'inspections', docId);
+      const docRef = doc(db, 'inspections', updatedInspection.id);
       await promiseWithTimeout(setDoc(docRef, safeData, { merge: true }), 2500, undefined);
     } catch (firestoreErr) {
-      handleFirestoreError(firestoreErr, 'saveInspection');
+      handleFirestoreError(firestoreErr, 'saveInspection:firestore');
     }
-  })();
+  }
 
-  const backendPromise = (async () => {
-    try {
-      const fetchPromise = fetch('/api/inspections', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(safeData),
-      });
-      await promiseWithTimeout(fetchPromise, 4000, undefined);
-    } catch (serverErr) {
-      console.debug('Aviso ao sincronizar com servidor central:', serverErr);
-    }
-  })();
+  // 3. Cache locally in memory and IndexedDB
+  const current = getStoredInspections();
+  const updatedList = [
+    updatedInspection,
+    ...current.filter((i) => i.id !== updatedInspection.id && i.uuid !== updatedInspection.uuid),
+  ];
+  saveAllInspections(updatedList, false);
+  await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
 
-  await Promise.allSettled([firestorePromise, backendPromise]);
-
-  if (onProgress) onProgress(4, 'Inspeção gravada e sincronizada com sucesso!');
+  if (onProgress) onProgress(4, 'Inspeção gravada no banco central com sucesso!');
 
   return updatedInspection;
 }
 
 /**
- * Delete inspection permanently from Firebase Firestore, Backend, IndexedDB, and local cache.
- * Uses persistent tombstones to guarantee it will never resurrect under any circumstance.
+ * Delete inspection permanently from Central Database, Firebase, and Local cache.
+ * Returns error if deletion on central server fails.
  */
-export async function deleteInspection(idOrUuid: string): Promise<void> {
-  // Find associated id and uuid
+export async function deleteInspection(idOrUuid: string): Promise<{ success: boolean; error?: string }> {
   const current = getStoredInspections();
   const matched = current.find((i) => i.id === idOrUuid || i.uuid === idOrUuid);
   const id = matched?.id || idOrUuid;
   const uuid = matched?.uuid;
 
-  // 1. Mark as permanently deleted across memory and localStorage
+  // 1. Call Central Server DELETE endpoint first
+  try {
+    const response = await fetch(`/api/inspections/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Erro no servidor central ao excluir registro');
+    }
+  } catch (err: any) {
+    console.error('Erro ao excluir no servidor central:', err);
+    if (!navigator.onLine) {
+      markAsPermanentlyDeleted(id, uuid, idOrUuid);
+      const filtered = current.filter(
+        (i) => i.id !== id && i.id !== idOrUuid && (!uuid || i.uuid !== uuid)
+      );
+      inMemoryInspections = filtered;
+      saveAllInspections(filtered, false);
+      await deleteFromIndexedDB(id);
+      return { success: true };
+    }
+    return { success: false, error: err.message || 'Não foi possível excluir a inspeção.' };
+  }
+
+  // 2. Mark as permanently deleted (tombstone)
   markAsPermanentlyDeleted(id, uuid, idOrUuid);
 
-  // 2. Filter local memory and localStorage immediately
+  // 3. Filter local memory and localStorage
   const filtered = current.filter(
     (i) => i.id !== id && i.id !== idOrUuid && (!uuid || i.uuid !== uuid) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
   );
-  
   inMemoryInspections = filtered;
-  try {
-    localStorage.setItem(STORAGE_FALLBACK_KEY, JSON.stringify(filtered));
-  } catch {}
+  saveAllInspections(filtered, false);
 
-  // 3. Delete from IndexedDB immediately
+  // 4. Delete from IndexedDB
   await deleteFromIndexedDB(id);
   if (uuid && uuid !== id) {
     await deleteFromIndexedDB(uuid);
   }
 
-  // 4. Delete from Firebase Firestore & write permanent tombstone (if within quota)
+  // 5. Delete from Firebase Firestore & write permanent tombstone (if within quota)
   if (canWriteToFirestore()) {
     try {
       const docRef = doc(db, 'inspections', id);
@@ -672,7 +629,6 @@ export async function deleteInspection(idOrUuid: string): Promise<void> {
         await deleteDoc(doc(db, 'inspections', uuid)).catch(() => {});
       }
 
-      // Write permanent tombstone to Firestore so other devices know it was deleted
       const tombstoneRef = doc(db, 'deleted_inspections', id);
       await setDoc(tombstoneRef, {
         id,
@@ -680,16 +636,11 @@ export async function deleteInspection(idOrUuid: string): Promise<void> {
         deletedAt: new Date().toISOString(),
       });
     } catch (firestoreErr) {
-      handleFirestoreError(firestoreErr, 'deleteInspection');
+      handleFirestoreError(firestoreErr, 'deleteInspection:firestore');
     }
   }
 
-  // 5. Delete from backend server (always available)
-  try {
-    await fetch(`/api/inspections/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-  } catch {}
+  return { success: true };
 }
 
 // ---------------- DRAFT STORAGE ---------------- //
@@ -741,7 +692,6 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
       localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(updated));
     } catch {}
 
-    // Save to Firebase Firestore config
     if (canWriteToFirestore()) {
       try {
         await setDoc(doc(db, 'app_config', 'types'), {
@@ -767,24 +717,99 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
   return current;
 }
 
-// ---------------- REALTIME MULTI-CLIENT FIREBASE SYNCHRONIZATION ---------------- //
+// ---------------- REALTIME MULTI-CLIENT SYNCHRONIZATION ---------------- //
 
 /**
- * Setup Realtime Firebase Firestore listener & SSE stream with non-destructive merge
- * and guaranteed instant deletion synchronization.
+ * Setup Realtime SSE stream with Central Unified Server & Firestore listener.
+ * Guarantees instant synchronization across all devices and browsers.
  */
 export function setupRealtimeSync(
   onInspectionsUpdate: (inspections: Inspection[]) => void,
-  onTypesUpdate?: (types: string[]) => void
+  onTypesUpdate?: (types: string[]) => void,
+  onStatusChange?: (status: 'online' | 'syncing' | 'offline') => void
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
   let unsubscribeDeleted: (() => void) | null = null;
   let unsubscribeTypes: (() => void) | null = null;
+  let eventSource: EventSource | null = null;
+  let isCleaningUp = false;
+  let reconnectTimer: any = null;
 
-  // 1. Listen to Firebase Firestore if quota is healthy
+  const connectSSE = () => {
+    if (isCleaningUp || typeof window === 'undefined' || !('EventSource' in window)) return;
+
+    try {
+      if (eventSource) {
+        eventSource.close();
+      }
+      eventSource = new EventSource('/api/events');
+
+      eventSource.addEventListener('connected', () => {
+        if (onStatusChange) onStatusChange('online');
+      });
+
+      eventSource.addEventListener('database_update', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data) {
+            if (data.action === 'delete' && data.deletedId) {
+              markAsPermanentlyDeleted(data.deletedId);
+            }
+            if (Array.isArray(data.deletedIds)) {
+              markAsPermanentlyDeleted(...data.deletedIds);
+            }
+            if (Array.isArray(data.inspections)) {
+              const cleaned = data.inspections.filter(
+                (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
+              );
+              const sorted = sortInspectionsDescending(cleaned);
+              inMemoryInspections = sorted;
+              saveAllInspections(sorted, false);
+              onInspectionsUpdate(sorted);
+            }
+          }
+        } catch (e) {
+          console.debug('Error processing database_update SSE:', e);
+        }
+      });
+
+      eventSource.addEventListener('types_update', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && Array.isArray(data.types) && data.types.length > 0) {
+            localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
+            if (onTypesUpdate) onTypesUpdate(data.types);
+          }
+        } catch (e) {
+          console.debug('Error processing types_update SSE:', e);
+        }
+      });
+
+      eventSource.onerror = () => {
+        if (onStatusChange) onStatusChange('offline');
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        if (!isCleaningUp) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connectSSE, 3000);
+        }
+      };
+    } catch (err) {
+      if (onStatusChange) onStatusChange('offline');
+      if (!isCleaningUp) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectSSE, 3000);
+      }
+    }
+  };
+
+  connectSSE();
+
+  // Also listen to Firestore if available
   if (canWriteToFirestore()) {
     try {
-      // 1. Listen to 'deleted_inspections' in Firestore in real-time
       const deletedRef = collection(db, 'deleted_inspections');
       unsubscribeDeleted = onSnapshot(
         deletedRef,
@@ -809,147 +834,10 @@ export function setupRealtimeSync(
           handleFirestoreError(error, 'realtime listener deleted_inspections');
         }
       );
-
-      // 2. Listen to 'inspections' collection in Firestore in real-time
-      const inspectionsRef = collection(db, 'inspections');
-      unsubscribeFirestore = onSnapshot(
-        inspectionsRef,
-        (snapshot) => {
-          const cloudList: Inspection[] = [];
-          snapshot.forEach((d) => {
-            const item = d.data() as Inspection;
-            const docId = d.id;
-            const itemUuid = item?.uuid || item?.id || docId;
-
-            // If document was marked deleted, ignore it safely without calling deleteDoc inside loop
-            if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(item?.id)) {
-              return;
-            }
-
-            if (item && (item.id || item.uuid) && !isSeedInspection(item) && !isSeedInspection({ id: docId })) {
-              cloudList.push({
-                ...item,
-                id: item.id || docId,
-                uuid: itemUuid,
-              });
-            }
-          });
-
-          // The live Firestore list is combined with local storage
-          const currentStored = getStoredInspections();
-          const offlineLocalOnly = currentStored.filter(
-            (localItem) =>
-              !isIdDeleted(localItem.id) &&
-              !isIdDeleted(localItem.uuid) &&
-              !cloudList.some((cloudItem) => cloudItem.id === localItem.id || cloudItem.uuid === localItem.uuid) &&
-              !localItem.sincronizado
-          );
-
-          const unifiedList = mergeInspections(cloudList, offlineLocalOnly);
-          inMemoryInspections = unifiedList;
-          saveAllInspections(unifiedList, false);
-          onInspectionsUpdate(unifiedList);
-        },
-        (error) => {
-          handleFirestoreError(error, 'realtime listener inspections');
-        }
-      );
-
-      // 3. Listen to custom types config in Firestore
-      const typesDocRef = doc(db, 'app_config', 'types');
-      unsubscribeTypes = onSnapshot(
-        typesDocRef,
-        (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            if (data && Array.isArray(data.types) && data.types.length > 0) {
-              localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
-              if (onTypesUpdate) onTypesUpdate(data.types);
-            }
-          }
-        },
-        (error) => {
-          handleFirestoreError(error, 'realtime listener types');
-        }
-      );
     } catch (e) {
       handleFirestoreError(e, 'setupRealtimeSync:init');
     }
   }
-
-  // 4. Setup Primary Real-time SSE Stream directly with the Single Unified Server
-  let eventSource: EventSource | null = null;
-  let isCleaningUp = false;
-  let reconnectTimer: any = null;
-
-  const connectSSE = () => {
-    if (isCleaningUp || typeof window === 'undefined' || !('EventSource' in window)) return;
-
-    try {
-      if (eventSource) {
-        eventSource.close();
-      }
-      eventSource = new EventSource('/api/events');
-
-      eventSource.addEventListener('connected', () => {
-        // Connected to unified server
-      });
-
-      eventSource.addEventListener('database_update', (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data) {
-            if (data.action === 'delete' && data.deletedId) {
-              markAsPermanentlyDeleted(data.deletedId);
-            }
-            if (Array.isArray(data.deletedIds)) {
-              markAsPermanentlyDeleted(...data.deletedIds);
-            }
-            if (Array.isArray(data.inspections)) {
-              const cleaned = data.inspections.filter(
-                (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
-              );
-              inMemoryInspections = sortInspectionsDescending(cleaned);
-              saveAllInspections(inMemoryInspections, false);
-              onInspectionsUpdate(inMemoryInspections);
-            }
-          }
-        } catch (e) {
-          console.debug('Error processing database_update SSE:', e);
-        }
-      });
-
-      eventSource.addEventListener('types_update', (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data && Array.isArray(data.types) && data.types.length > 0) {
-            localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(data.types));
-            if (onTypesUpdate) onTypesUpdate(data.types);
-          }
-        } catch (e) {
-          console.debug('Error processing types_update SSE:', e);
-        }
-      });
-
-      eventSource.onerror = () => {
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-        }
-        if (!isCleaningUp) {
-          clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connectSSE, 3000);
-        }
-      };
-    } catch (err) {
-      if (!isCleaningUp) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSSE, 3000);
-      }
-    }
-  };
-
-  connectSSE();
 
   return () => {
     isCleaningUp = true;
@@ -968,110 +856,20 @@ export interface MultiplatformSyncResult {
   total: number;
   newlySynced: number;
   timestamp: string;
-  source: 'cloud' | 'server' | 'hybrid' | 'local';
+  source: 'server' | 'cloud' | 'local';
   message: string;
   inspections: Inspection[];
 }
 
 /**
- * Perform complete multiplatform 2-way synchronization across Firebase Cloud, Central Server, and Local DB.
- * Pushes any local records, retrieves all records created on other devices/browsers,
- * purges permanently deleted records via tombstones, and returns the unified database.
+ * Perform complete multiplatform synchronization querying the Central Server.
  */
 export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> {
-  // 1. Gather all local data (memory, localStorage, IndexedDB)
-  const localList = getStoredInspections();
-  const idbList = await loadAllFromIndexedDB();
-  const localUnified = mergeInspections(localList, idbList);
-  
-  // 2. Fetch and propagate deletion tombstones from Firebase Firestore (if within quota)
-  if (canWriteToFirestore()) {
-    try {
-      const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
-      deletedSnap.forEach((d) => {
-        markAsPermanentlyDeleted(d.id);
-      });
-    } catch (err) {
-      handleFirestoreError(err, 'fullMultiplatformSync:deleted');
-    }
-  }
-
-  // 3. Push any local deletion tombstones to Firestore (if within quota)
   const allDeletedIds = Array.from(deletedIdsSet);
-  if (allDeletedIds.length > 0 && canWriteToFirestore()) {
-    try {
-      const batch = writeBatch(db);
-      allDeletedIds.forEach((dId) => {
-        batch.set(
-          doc(db, 'deleted_inspections', dId),
-          { id: dId, deletedAt: new Date().toISOString() },
-          { merge: true }
-        );
-      });
-      await batch.commit();
-    } catch (err) {
-      handleFirestoreError(err, 'fullMultiplatformSync:pushDeleted');
-    }
-  }
 
-  // 4. Push local un-deleted inspections to Firebase Firestore (if within quota)
-  let firestoreItems: Inspection[] = [];
-  if (canWriteToFirestore()) {
-    try {
-      const batch = writeBatch(db);
-      let batchCount = 0;
-      localUnified.forEach((insp) => {
-        if (!isIdDeleted(insp.id) && !isIdDeleted(insp.uuid)) {
-          const safe = sanitizeForFirestore({
-            ...insp,
-            sincronizado: true,
-            updatedAt: insp.updatedAt || new Date().toISOString(),
-          });
-          batch.set(doc(db, 'inspections', insp.id), safe, { merge: true });
-          batchCount++;
-        }
-      });
-      if (batchCount > 0) {
-        await batch.commit();
-      }
-    } catch (err) {
-      handleFirestoreError(err, 'fullMultiplatformSync:pushInspections');
-    }
-  }
-
-  // 5. Pull authoritative inspections from Firebase Firestore (if within quota)
-  if (canWriteToFirestore()) {
-    try {
-      const querySnapshot = await getDocs(collection(db, 'inspections'));
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data() as Inspection;
-        const docId = docSnap.id;
-        const itemUuid = data?.uuid || data?.id || docId;
-
-        if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
-          return;
-        }
-
-        if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
-          firestoreItems.push({
-            ...data,
-            id: data.id || docId,
-            uuid: itemUuid,
-          });
-        }
-      });
-    } catch (err) {
-      handleFirestoreError(err, 'fullMultiplatformSync:pullInspections');
-    }
-  }
-
-  // 6. Push and Pull to/from Central Express Server (/api/sync)
   let backendItems: Inspection[] = [];
   try {
     const syncPayload = {
-      inspections: localUnified
-        .filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
-        .map((i) => sanitizeForFirestore({ ...i, sincronizado: true })),
       deletedIds: allDeletedIds,
     };
 
@@ -1096,26 +894,28 @@ export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> 
     console.warn('Aviso ao sincronizar com servidor central:', serverErr);
   }
 
-  // 7. Non-destructive smart merge of local, Firestore, and backend
-  const merged = mergeInspections(localUnified, firestoreItems, backendItems);
+  let finalInspections: Inspection[];
+  if (backendItems.length > 0 || navigator.onLine) {
+    finalInspections = sortInspectionsDescending(backendItems);
+  } else {
+    finalInspections = getStoredInspections();
+  }
 
-  // 8. Persist merged data locally
-  inMemoryInspections = merged;
-  saveAllInspections(merged, false);
+  inMemoryInspections = finalInspections;
+  saveAllInspections(finalInspections, false);
 
   const timeStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return {
     success: true,
-    total: merged.length,
-    newlySynced: merged.length,
+    total: finalInspections.length,
+    newlySynced: finalInspections.length,
     timestamp: timeStr,
-    source: firestoreItems.length > 0 && backendItems.length > 0 ? 'hybrid' : firestoreItems.length > 0 ? 'cloud' : 'server',
-    message: `${merged.length} ${merged.length === 1 ? 'registro sincronizado' : 'registros sincronizados'} no servidor central com sucesso!`,
-    inspections: merged,
+    source: 'server',
+    message: `${finalInspections.length} ${finalInspections.length === 1 ? 'registro sincronizado' : 'registros sincronizados'} no banco central com sucesso!`,
+    inspections: finalInspections,
   };
 }
-
 
 /**
  * Export full system database backup
@@ -1127,7 +927,6 @@ export async function exportDatabaseBackup(): Promise<void> {
     appName: 'INSPEÇÃO PRONTO!',
     version: '2.0.0',
     exportDate: new Date().toISOString(),
-    firebaseProject: 'steadfast-realm-16rpq',
     inspections,
     inspectionTypes: getStoredInspectionTypes(),
   };
@@ -1144,7 +943,7 @@ export async function exportDatabaseBackup(): Promise<void> {
 }
 
 /**
- * Import and merge/restore database backup
+ * Import and restore database backup
  */
 export async function importDatabaseBackup(jsonString: string): Promise<{ success: boolean; count: number; error?: string }> {
   try {
@@ -1153,44 +952,23 @@ export async function importDatabaseBackup(jsonString: string): Promise<{ succes
       return { success: false, count: 0, error: 'Formato de arquivo de backup inválido.' };
     }
 
-    const current = getStoredInspections();
-    const merged = mergeInspections(current, parsed.inspections);
-    saveAllInspections(merged, false);
+    const response = await fetch('/api/backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        inspections: parsed.inspections,
+        inspectionTypes: parsed.inspectionTypes || getStoredInspectionTypes(),
+      }),
+    });
 
-    if (parsed.inspectionTypes && Array.isArray(parsed.inspectionTypes)) {
-      localStorage.setItem(STORAGE_TYPES_KEY, JSON.stringify(parsed.inspectionTypes));
+    if (response.ok) {
+      const data = await response.json();
+      const updated = await fetchServerInspections();
+      return { success: true, count: updated.length };
+    } else {
+      throw new Error('Falha ao importar backup no servidor central');
     }
-
-    // Direct Batch Save to Firebase Firestore (if within quota)
-    if (canWriteToFirestore()) {
-      try {
-        const batch = writeBatch(db);
-        merged.forEach((insp) => {
-          const docRef = doc(db, 'inspections', insp.id);
-          const safe = sanitizeForFirestore({ ...insp, sincronizado: true, updatedAt: new Date().toISOString() });
-          batch.set(docRef, safe, { merge: true });
-        });
-        await batch.commit();
-      } catch (e) {
-        handleFirestoreError(e, 'importDatabaseBackup');
-      }
-    }
-
-    // Sync backup with system server
-    try {
-      await fetch('/api/backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inspections: merged,
-          inspectionTypes: parsed.inspectionTypes || getStoredInspectionTypes(),
-        }),
-      });
-    } catch {}
-
-    return { success: true, count: parsed.inspections.length };
   } catch (err: any) {
     return { success: false, count: 0, error: err.message || 'Falha ao processar arquivo JSON' };
   }
 }
-

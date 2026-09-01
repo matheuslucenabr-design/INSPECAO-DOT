@@ -400,6 +400,7 @@ export default function App() {
             onSync={handleManualSync}
             isSyncing={isSyncing}
             lastSyncTime={lastSyncTime}
+            isOnline={isOnline}
           />
         )}
 
