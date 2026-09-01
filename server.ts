@@ -28,6 +28,8 @@ interface GPSLocation {
 interface Inspection {
   id: string;
   uuid: string;
+  roomId?: string;
+  sala?: string;
   status: 'rascunho' | 'processando' | 'concluida' | 'sincronizada';
   dataCriacao: string;
   dataEnvio?: string;
@@ -48,9 +50,32 @@ interface Inspection {
   versaoApp: string;
 }
 
+export interface InspectionRoom {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+  description?: string;
+  isDefault?: boolean;
+  totalInspections?: number;
+}
+
 const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+
+const DEFAULT_ROOM_ID = 'tecnico@inspecaopronto.com';
+
+const DEFAULT_ROOMS: InspectionRoom[] = [
+  {
+    id: DEFAULT_ROOM_ID,
+    name: 'Sala Principal - Técnico',
+    email: DEFAULT_ROOM_ID,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    isDefault: true,
+    description: 'Sala unificada central do sistema para compartilhamento de todas as inspeções',
+  },
+];
 
 const DEFAULT_INSPECTION_TYPES = [
   'Inspeção Pós-Serviço',
@@ -62,6 +87,7 @@ const DEFAULT_INSPECTION_TYPES = [
 ];
 
 interface DatabaseSchema {
+  rooms?: InspectionRoom[];
   inspections: Inspection[];
   inspectionTypes: string[];
   deletedIds: string[];
@@ -91,6 +117,22 @@ function initializeDatabase(): DatabaseSchema {
             !deletedSet.has(insp.id) &&
             !deletedSet.has(insp.uuid)
         );
+
+        // Ensure every inspection has a roomId
+        parsed.inspections.forEach((insp: Inspection) => {
+          if (!insp.roomId) {
+            insp.roomId = DEFAULT_ROOM_ID;
+            insp.sala = DEFAULT_ROOM_ID;
+          }
+        });
+
+        // Ensure rooms list exists and contains default room
+        if (!Array.isArray(parsed.rooms) || parsed.rooms.length === 0) {
+          parsed.rooms = [...DEFAULT_ROOMS];
+        } else if (!parsed.rooms.some((r: InspectionRoom) => r.id === DEFAULT_ROOM_ID)) {
+          parsed.rooms.unshift(DEFAULT_ROOMS[0]);
+        }
+
         parsed.deletedIds = Array.from(deletedSet);
         fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
         return parsed;
@@ -102,6 +144,7 @@ function initializeDatabase(): DatabaseSchema {
 
   // Clean empty state ready for production use
   const initialDb: DatabaseSchema = {
+    rooms: [...DEFAULT_ROOMS],
     inspections: [],
     inspectionTypes: DEFAULT_INSPECTION_TYPES,
     deletedIds: [],
@@ -192,12 +235,100 @@ async function startServer() {
     });
   });
 
-  // API: Get all inspections and deleted IDs from central system database
-  app.get('/api/inspections', (req, res) => {
+  // API: Get all registered rooms
+  app.get('/api/rooms', (req, res) => {
+    if (!dbMemory.rooms || dbMemory.rooms.length === 0) {
+      dbMemory.rooms = [...DEFAULT_ROOMS];
+    }
+
+    // Calculate real-time count of active inspections in each room
+    const countsMap = new Map<string, number>();
+    dbMemory.inspections.forEach((insp) => {
+      const rId = (insp.roomId || DEFAULT_ROOM_ID).toLowerCase();
+      countsMap.set(rId, (countsMap.get(rId) || 0) + 1);
+    });
+
+    const enrichedRooms = dbMemory.rooms.map((room) => ({
+      ...room,
+      totalInspections: countsMap.get(room.id.toLowerCase()) || 0,
+    }));
+
     res.json({
       success: true,
-      total: dbMemory.inspections.length,
-      inspections: dbMemory.inspections,
+      defaultRoomId: DEFAULT_ROOM_ID,
+      rooms: enrichedRooms,
+    });
+  });
+
+  // API: Register a new inspection room
+  app.post('/api/rooms', (req, res) => {
+    try {
+      const { id, name, email, description } = req.body;
+      const rawId = (id || email || '').trim().toLowerCase();
+      if (!rawId) {
+        res.status(400).json({ success: false, error: 'Identificador ou e-mail da sala é obrigatório' });
+        return;
+      }
+
+      if (!dbMemory.rooms) dbMemory.rooms = [...DEFAULT_ROOMS];
+      
+      const existing = dbMemory.rooms.find((r) => r.id.toLowerCase() === rawId);
+      if (existing) {
+        res.json({
+          success: true,
+          message: 'Sala já cadastrada',
+          room: existing,
+          rooms: dbMemory.rooms,
+        });
+        return;
+      }
+
+      const newRoom: InspectionRoom = {
+        id: rawId,
+        email: email ? email.trim() : rawId,
+        name: name ? name.trim() : `Sala ${rawId}`,
+        description: description ? description.trim() : 'Sala de inspeções',
+        createdAt: new Date().toISOString(),
+        isDefault: rawId === DEFAULT_ROOM_ID.toLowerCase(),
+      };
+
+      dbMemory.rooms.push(newRoom);
+      persistDatabase();
+
+      broadcastRealtimeUpdate('rooms_update', {
+        rooms: dbMemory.rooms,
+        defaultRoomId: DEFAULT_ROOM_ID,
+      });
+
+      res.json({
+        success: true,
+        message: `Sala ${newRoom.id} criada com sucesso`,
+        room: newRoom,
+        rooms: dbMemory.rooms,
+      });
+    } catch (err: any) {
+      console.error('Error creating room:', err);
+      res.status(500).json({ success: false, error: err.message || 'Erro ao criar sala' });
+    }
+  });
+
+  // API: Get all inspections and deleted IDs from central system database (filtered by room if specified)
+  app.get('/api/inspections', (req, res) => {
+    const requestedRoom = (req.query.room as string || req.headers['x-room-id'] as string || '').trim().toLowerCase();
+    
+    let filteredInspections = dbMemory.inspections;
+    if (requestedRoom && requestedRoom !== 'all') {
+      filteredInspections = dbMemory.inspections.filter((insp) => {
+        const itemRoom = (insp.roomId || insp.sala || DEFAULT_ROOM_ID).toLowerCase();
+        return itemRoom === requestedRoom;
+      });
+    }
+
+    res.json({
+      success: true,
+      room: requestedRoom || DEFAULT_ROOM_ID,
+      total: filteredInspections.length,
+      inspections: filteredInspections,
       deletedIds: dbMemory.deletedIds || [],
       lastUpdated: dbMemory.lastUpdated,
     });
@@ -218,6 +349,23 @@ async function startServer() {
       if (!inspection || !inspection.id) {
         res.status(400).json({ success: false, error: 'Dados de inspeção inválidos' });
         return;
+      }
+
+      // Assign room
+      const targetRoom = (inspection.roomId || inspection.sala || (req.query.room as string) || DEFAULT_ROOM_ID).trim().toLowerCase();
+      inspection.roomId = targetRoom;
+      inspection.sala = targetRoom;
+
+      // Ensure room exists in dbMemory.rooms
+      if (!dbMemory.rooms) dbMemory.rooms = [...DEFAULT_ROOMS];
+      if (!dbMemory.rooms.some((r) => r.id.toLowerCase() === targetRoom)) {
+        dbMemory.rooms.push({
+          id: targetRoom,
+          email: targetRoom,
+          name: `Sala ${targetRoom}`,
+          createdAt: new Date().toISOString(),
+          isDefault: targetRoom === DEFAULT_ROOM_ID.toLowerCase(),
+        });
       }
 
       // If user submits a newly saved inspection, ensure it is no longer marked deleted
@@ -244,6 +392,7 @@ async function startServer() {
       // Broadcast real-time change to all connected browsers & devices immediately
       broadcastRealtimeUpdate('database_update', {
         action: existingIndex >= 0 ? 'update' : 'create',
+        roomId: savedItem.roomId,
         inspectionId: savedItem.id,
         inspection: savedItem,
         inspections: dbMemory.inspections,
@@ -255,6 +404,7 @@ async function startServer() {
       res.json({
         success: true,
         message: 'Inspeção gravada com sucesso no banco de dados central do sistema',
+        room: savedItem.roomId,
         inspection: savedItem,
         total: dbMemory.inspections.length,
       });
@@ -396,7 +546,8 @@ async function startServer() {
   // API: Full Multiplatform Synchronization Endpoint
   app.post('/api/sync', (req, res) => {
     try {
-      const { inspections, deletedIds } = req.body;
+      const { inspections, deletedIds, room } = req.body;
+      const targetRoom = (room || (req.query.room as string) || '').trim().toLowerCase();
       
       // 1. Process and record any deletion tombstones
       if (Array.isArray(deletedIds)) {
@@ -426,15 +577,23 @@ async function startServer() {
             continue;
           }
 
-          if (!map.has(item.id)) {
-            map.set(item.id, { ...item, sincronizado: true });
+          const itemRoom = (item.roomId || item.sala || targetRoom || DEFAULT_ROOM_ID).toLowerCase();
+          const cleanItem = {
+            ...item,
+            roomId: itemRoom,
+            sala: itemRoom,
+            sincronizado: true,
+          };
+
+          if (!map.has(cleanItem.id)) {
+            map.set(cleanItem.id, cleanItem);
             hasChanges = true;
           } else {
-            const existing = map.get(item.id)!;
+            const existing = map.get(cleanItem.id)!;
             const existingTime = existing.updatedAt || existing.dataEnvio || existing.dataCriacao || '';
-            const incomingTime = item.updatedAt || item.dataEnvio || item.dataCriacao || '';
-            if (incomingTime >= existingTime || (item.fotos?.length || 0) > (existing.fotos?.length || 0)) {
-              map.set(item.id, { ...item, sincronizado: true });
+            const incomingTime = cleanItem.updatedAt || cleanItem.dataEnvio || cleanItem.dataCriacao || '';
+            if (incomingTime >= existingTime || (cleanItem.fotos?.length || 0) > (existing.fotos?.length || 0)) {
+              map.set(cleanItem.id, cleanItem);
               hasChanges = true;
             }
           }
@@ -451,6 +610,7 @@ async function startServer() {
         persistDatabase();
         broadcastRealtimeUpdate('database_update', {
           action: 'sync',
+          roomId: targetRoom || DEFAULT_ROOM_ID,
           inspections: dbMemory.inspections,
           deletedIds: dbMemory.deletedIds,
           total: dbMemory.inspections.length,
@@ -458,11 +618,17 @@ async function startServer() {
         });
       }
 
+      const filteredForResponse = targetRoom && targetRoom !== 'all'
+        ? dbMemory.inspections.filter((i) => (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase() === targetRoom)
+        : dbMemory.inspections;
+
       res.json({
         success: true,
-        inspections: dbMemory.inspections,
+        room: targetRoom || DEFAULT_ROOM_ID,
+        inspections: filteredForResponse,
         deletedIds: dbMemory.deletedIds || [],
-        total: dbMemory.inspections.length,
+        total: filteredForResponse.length,
+        totalAllRooms: dbMemory.inspections.length,
         lastUpdated: dbMemory.lastUpdated,
         message: 'Sincronização multiplataforma concluída com sucesso',
       });

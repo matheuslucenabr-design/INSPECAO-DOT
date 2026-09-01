@@ -14,17 +14,124 @@ import {
   disableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Inspection } from '../types/inspection';
+import { Inspection, InspectionRoom } from '../types/inspection';
 
 const DB_NAME = 'inspecao_pronto_local_db_v3';
 const DB_VERSION = 1;
 const STORE_INSPECTIONS = 'inspections';
 const STORE_CONFIG = 'app_config';
 
+export const DEFAULT_ROOM_ID = 'tecnico@inspecaopronto.com';
+
+const STORAGE_ACTIVE_ROOM_KEY = 'inspecao_pronto_active_room_v1';
+const STORAGE_ROOMS_KEY = 'inspecao_pronto_rooms_v1';
 const STORAGE_FALLBACK_KEY = 'inspecao_pronto_records_v3';
 const STORAGE_DELETED_IDS_KEY = 'inspecao_pronto_deleted_ids_v3';
 const STORAGE_DRAFT_KEY = 'inspecao_pronto_draft_v1';
 const STORAGE_TYPES_KEY = 'inspecao_pronto_types_v1';
+
+export const DEFAULT_ROOMS: InspectionRoom[] = [
+  {
+    id: DEFAULT_ROOM_ID,
+    name: 'Sala do Técnico',
+    email: DEFAULT_ROOM_ID,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    isDefault: true,
+    description: 'Sala unificada central do sistema para compartilhamento de todas as inspeções',
+  },
+];
+
+/**
+ * Get active inspection room ID (defaults to tecnico@inspecaopronto.com)
+ */
+export function getActiveRoom(): string {
+  try {
+    const saved = localStorage.getItem(STORAGE_ACTIVE_ROOM_KEY);
+    if (saved && saved.trim()) return saved.trim().toLowerCase();
+  } catch {}
+  return DEFAULT_ROOM_ID;
+}
+
+/**
+ * Set active inspection room ID and store in localStorage
+ */
+export function setActiveRoom(roomId: string): void {
+  try {
+    const cleanId = (roomId || DEFAULT_ROOM_ID).trim().toLowerCase();
+    localStorage.setItem(STORAGE_ACTIVE_ROOM_KEY, cleanId);
+  } catch (err) {
+    console.error('Erro ao definir sala ativa:', err);
+  }
+}
+
+/**
+ * Fetch available rooms from server database
+ */
+export async function fetchServerRooms(): Promise<InspectionRoom[]> {
+  try {
+    const response = await fetch('/api/rooms');
+    if (response.ok) {
+      const data = await response.json();
+      if (data && Array.isArray(data.rooms) && data.rooms.length > 0) {
+        localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(data.rooms));
+        return data.rooms;
+      }
+    }
+  } catch (e) {
+    console.debug('Erro ao carregar salas do servidor:', e);
+  }
+
+  // Fallback to local cache or defaults
+  try {
+    const cached = localStorage.getItem(STORAGE_ROOMS_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+
+  return DEFAULT_ROOMS;
+}
+
+/**
+ * Register a new room in the central database
+ */
+export async function createRemoteRoom(room: { id: string; name?: string; email?: string; description?: string }): Promise<InspectionRoom> {
+  const cleanId = (room.id || room.email || '').trim().toLowerCase();
+  if (!cleanId) throw new Error('ID ou E-mail da sala é obrigatório');
+
+  try {
+    const response = await fetch('/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: cleanId,
+        email: room.email || cleanId,
+        name: room.name || `Sala ${cleanId}`,
+        description: room.description || 'Sala de inspeções',
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.room) {
+        return data.room;
+      }
+    }
+  } catch (err) {
+    console.warn('Falha na criação de sala no servidor:', err);
+  }
+
+  const fallbackRoom: InspectionRoom = {
+    id: cleanId,
+    email: room.email || cleanId,
+    name: room.name || `Sala ${cleanId}`,
+    createdAt: new Date().toISOString(),
+    isDefault: cleanId === DEFAULT_ROOM_ID,
+  };
+
+  return fallbackRoom;
+}
 
 export const DEFAULT_INSPECTION_TYPES = [
   'Inspeção Pós-Serviço',
@@ -424,13 +531,17 @@ export function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fa
  * Fetch all inspections from the Central Database (Single Source of Truth).
  * Overwrites local state with authoritative server data, purging deleted records.
  */
-export async function fetchServerInspections(forceCloud = false): Promise<Inspection[]> {
+export async function fetchServerInspections(forceCloud = false, roomId?: string): Promise<Inspection[]> {
+  const targetRoom = (roomId || getActiveRoom() || DEFAULT_ROOM_ID).trim().toLowerCase();
   let backendItems: Inspection[] | null = null;
 
   // 1. Fetch from Central Express Server database
   try {
-    const response = await fetch('/api/inspections', {
-      headers: { Accept: 'application/json' },
+    const response = await fetch(`/api/inspections?room=${encodeURIComponent(targetRoom)}`, {
+      headers: {
+        Accept: 'application/json',
+        'X-Room-ID': targetRoom,
+      },
     });
     if (response.ok) {
       const data = await response.json();
@@ -470,11 +581,18 @@ export async function fetchServerInspections(forceCloud = false): Promise<Inspec
           return;
         }
 
+        const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
+        if (targetRoom && targetRoom !== 'all' && itemRoom !== targetRoom) {
+          return;
+        }
+
         if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
           firestoreItems.push({
             ...data,
             id: data.id || docId,
             uuid: itemUuid,
+            roomId: itemRoom,
+            sala: itemRoom,
           });
         }
       });
@@ -499,7 +617,10 @@ export async function fetchServerInspections(forceCloud = false): Promise<Inspec
   }
 
   // Offline fallback
-  return getStoredInspections();
+  return getStoredInspections().filter((insp) => {
+    const itemRoom = (insp.roomId || insp.sala || DEFAULT_ROOM_ID).toLowerCase();
+    return targetRoom === 'all' || itemRoom === targetRoom;
+  });
 }
 
 /**
@@ -512,10 +633,14 @@ export async function saveInspection(
 ): Promise<Inspection> {
   if (onProgress) onProgress(0, 'Validando e formatando dados da inspeção...');
   
+  const targetRoom = (inspection.roomId || inspection.sala || getActiveRoom() || DEFAULT_ROOM_ID).trim().toLowerCase();
+
   const updatedInspection: Inspection = {
     ...inspection,
     id: inspection.id || inspection.uuid || generateUniqueInspectionId(),
     uuid: inspection.uuid || inspection.id || generateUniqueInspectionId(),
+    roomId: targetRoom,
+    sala: targetRoom,
     timestamp: inspection.timestamp || Date.now(),
     sincronizado: true,
     updatedAt: new Date().toISOString(),
@@ -528,14 +653,17 @@ export async function saveInspection(
   if (onProgress) onProgress(1, 'Otimizando fotos e preparando evidências...');
 
   // 1. Save to Central Express Backend (Single Source of Truth)
-  if (onProgress) onProgress(2, 'Gravando no banco de dados central na nuvem...');
+  if (onProgress) onProgress(2, `Gravando na sala ${targetRoom} do servidor central...`);
   const safeData = sanitizeForFirestore(updatedInspection);
   
   let serverSaved = false;
   try {
-    const response = await fetch('/api/inspections', {
+    const response = await fetch(`/api/inspections?room=${encodeURIComponent(targetRoom)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Room-ID': targetRoom,
+      },
       body: JSON.stringify(safeData),
     });
     if (response.ok) {
@@ -565,7 +693,7 @@ export async function saveInspection(
   saveAllInspections(updatedList, false);
   await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
 
-  if (onProgress) onProgress(4, 'Inspeção gravada no banco central com sucesso!');
+  if (onProgress) onProgress(4, `Inspeção gravada na sala ${targetRoom} com sucesso!`);
 
   return updatedInspection;
 }
@@ -726,7 +854,8 @@ export async function saveCustomInspectionType(newType: string): Promise<string[
 export function setupRealtimeSync(
   onInspectionsUpdate: (inspections: Inspection[]) => void,
   onTypesUpdate?: (types: string[]) => void,
-  onStatusChange?: (status: 'online' | 'syncing' | 'offline') => void
+  onStatusChange?: (status: 'online' | 'syncing' | 'offline') => void,
+  onRoomsUpdate?: (rooms: InspectionRoom[]) => void
 ): () => void {
   let unsubscribeFirestore: (() => void) | null = null;
   let unsubscribeDeleted: (() => void) | null = null;
@@ -759,9 +888,13 @@ export function setupRealtimeSync(
               markAsPermanentlyDeleted(...data.deletedIds);
             }
             if (Array.isArray(data.inspections)) {
-              const cleaned = data.inspections.filter(
-                (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
-              );
+              const activeRoom = getActiveRoom();
+              const cleaned = data.inspections
+                .filter((i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
+                .filter((i: any) => {
+                  const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
+                  return activeRoom === 'all' || rId === activeRoom;
+                });
               const sorted = sortInspectionsDescending(cleaned);
               inMemoryInspections = sorted;
               saveAllInspections(sorted, false);
@@ -782,6 +915,18 @@ export function setupRealtimeSync(
           }
         } catch (e) {
           console.debug('Error processing types_update SSE:', e);
+        }
+      });
+
+      eventSource.addEventListener('rooms_update', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && Array.isArray(data.rooms) && data.rooms.length > 0) {
+            localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(data.rooms));
+            if (onRoomsUpdate) onRoomsUpdate(data.rooms);
+          }
+        } catch (e) {
+          console.debug('Error processing rooms_update SSE:', e);
         }
       });
 
@@ -823,8 +968,14 @@ export function setupRealtimeSync(
           });
 
           if (hasNewDeletes) {
+            const activeRoom = getActiveRoom();
             const current = getStoredInspections();
-            const filtered = current.filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
+            const filtered = current
+              .filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
+              .filter((i) => {
+                const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
+                return activeRoom === 'all' || rId === activeRoom;
+              });
             inMemoryInspections = filtered;
             saveAllInspections(filtered, false);
             onInspectionsUpdate(filtered);
@@ -859,23 +1010,29 @@ export interface MultiplatformSyncResult {
   source: 'server' | 'cloud' | 'local';
   message: string;
   inspections: Inspection[];
+  room: string;
 }
 
 /**
  * Perform complete multiplatform synchronization querying the Central Server.
  */
-export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> {
+export async function fullMultiplatformSync(roomId?: string): Promise<MultiplatformSyncResult> {
   const allDeletedIds = Array.from(deletedIdsSet);
+  const targetRoom = (roomId || getActiveRoom() || DEFAULT_ROOM_ID).trim().toLowerCase();
 
   let backendItems: Inspection[] = [];
   try {
     const syncPayload = {
       deletedIds: allDeletedIds,
+      room: targetRoom,
     };
 
     const response = await fetch('/api/sync', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Room-ID': targetRoom,
+      },
       body: JSON.stringify(syncPayload),
     });
 
@@ -898,7 +1055,10 @@ export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> 
   if (backendItems.length > 0 || navigator.onLine) {
     finalInspections = sortInspectionsDescending(backendItems);
   } else {
-    finalInspections = getStoredInspections();
+    finalInspections = getStoredInspections().filter((i) => {
+      const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
+      return targetRoom === 'all' || rId === targetRoom;
+    });
   }
 
   inMemoryInspections = finalInspections;
@@ -908,11 +1068,12 @@ export async function fullMultiplatformSync(): Promise<MultiplatformSyncResult> 
 
   return {
     success: true,
+    room: targetRoom,
     total: finalInspections.length,
     newlySynced: finalInspections.length,
     timestamp: timeStr,
     source: 'server',
-    message: `${finalInspections.length} ${finalInspections.length === 1 ? 'registro sincronizado' : 'registros sincronizados'} no banco central com sucesso!`,
+    message: `${finalInspections.length} ${finalInspections.length === 1 ? 'registro sincronizado' : 'registros sincronizados'} na sala ${targetRoom} com sucesso!`,
     inspections: finalInspections,
   };
 }

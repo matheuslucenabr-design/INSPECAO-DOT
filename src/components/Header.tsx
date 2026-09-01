@@ -1,5 +1,5 @@
 import React from 'react';
-import { Wifi, WifiOff, RefreshCw, ClipboardList, FolderArchive, BarChart3, Plus } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, ClipboardList, FolderArchive, BarChart3, Plus, KeyRound } from 'lucide-react';
 
 interface HeaderProps {
   isOnline: boolean;
@@ -10,6 +10,8 @@ interface HeaderProps {
   onSelectTab: (tab: 'inspecao' | 'registros' | 'dashboard') => void;
   onNewInspection: () => void;
   hasDraft?: boolean;
+  activeRoom?: string;
+  onOpenRoomModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,7 +23,11 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectTab,
   onNewInspection,
   hasDraft,
+  activeRoom,
+  onOpenRoomModal,
 }) => {
+  const displayRoom = activeRoom || 'tecnico@inspecaopronto.com';
+
   return (
     <header className="sticky top-0 z-40 bg-[#0A1D3D]/95 backdrop-blur-sm border-b border-[#12346B] text-[#FFFFFF]">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 h-13 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
@@ -75,6 +81,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Primary Action & Status Zone */}
         <div className="flex items-center gap-1.5 sm:gap-2.5">
+          {/* Room Selector / Indicator Button */}
+          <button
+            onClick={onOpenRoomModal}
+            className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-[#0F1726] hover:bg-[#12346B] border border-amber-500/40 hover:border-amber-400 text-amber-300 text-xs font-bold transition-all shadow-sm cursor-pointer"
+            title={`Sala Ativa: ${displayRoom}. Clique para gerenciar ou visualizar as salas de inspeção.`}
+          >
+            <KeyRound className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span className="hidden lg:inline text-[11px] max-w-[170px] truncate font-mono">
+              {displayRoom}
+            </span>
+            <span className="lg:hidden text-[11px] font-mono">
+              Sala
+            </span>
+          </button>
+
           {/* Multiplatform Sync Button */}
           <button
             onClick={onSync}

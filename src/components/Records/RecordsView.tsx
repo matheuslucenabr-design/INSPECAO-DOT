@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
+  KeyRound,
 } from 'lucide-react';
 import { Inspection, FilterOptions } from '../../types/inspection';
 import { RecordCard } from './RecordCard';
@@ -19,7 +20,7 @@ import { RecordTable } from './RecordTable';
 import { FilterModal } from './FilterModal';
 import { RecordDetailModal } from './RecordDetailModal';
 import { generateBulkInspectionsExcel } from '../../utils/exportExcel';
-import { exportDatabaseBackup, importDatabaseBackup } from '../../utils/storage';
+import { exportDatabaseBackup, importDatabaseBackup, DEFAULT_ROOM_ID } from '../../utils/storage';
 
 interface RecordsViewProps {
   inspections: Inspection[];
@@ -30,6 +31,8 @@ interface RecordsViewProps {
   isSyncing?: boolean;
   lastSyncTime?: string;
   isOnline?: boolean;
+  activeRoom?: string;
+  onOpenRoomModal?: () => void;
 }
 
 export const RecordsView: React.FC<RecordsViewProps> = ({
@@ -41,7 +44,10 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
   isSyncing,
   lastSyncTime,
   isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true,
+  activeRoom,
+  onOpenRoomModal,
 }) => {
+  const currentRoom = activeRoom || DEFAULT_ROOM_ID;
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -246,6 +252,18 @@ export const RecordsView: React.FC<RecordsViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            {/* Room Indicator / Switcher Button */}
+            <button
+              onClick={onOpenRoomModal}
+              className="py-1.5 sm:py-2.5 px-2.5 sm:px-3 bg-[#0F1726] hover:bg-[#12346B] border border-amber-500/40 hover:border-amber-400 text-amber-300 text-[11px] sm:text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              title={`Sala Central: ${currentRoom}. Clique para gerenciar e alternar salas de inspeção.`}
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="font-mono text-white max-w-[140px] sm:max-w-[200px] truncate">
+                {currentRoom}
+              </span>
+            </button>
+
             {/* Multiplatform Sync Button */}
             <button
               onClick={onSync}

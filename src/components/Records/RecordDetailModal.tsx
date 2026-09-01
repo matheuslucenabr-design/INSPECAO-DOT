@@ -136,6 +136,15 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                   {inspection.responsavel} {inspection.matricula ? `(${inspection.matricula})` : ''}
                 </span>
               </div>
+
+              <div className="bg-[#12346B]/40 p-2.5 border border-[#12346B] sm:col-span-2 md:col-span-3">
+                <span className="text-[9px] sm:text-[10px] text-amber-300 uppercase block font-bold">
+                  Sala de Armazenamento Central
+                </span>
+                <span className="font-mono font-bold text-amber-200 text-xs">
+                  {inspection.roomId || inspection.sala || 'tecnico@inspecaopronto.com'}
+                </span>
+              </div>
             </div>
           </div>
 

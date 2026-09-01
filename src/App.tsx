@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Inspection, InspectionPhoto, GPSLocation } from './types/inspection';
+import { Inspection, InspectionPhoto, GPSLocation, InspectionRoom } from './types/inspection';
 import {
   getStoredInspections,
   fetchServerInspections,
@@ -18,6 +18,9 @@ import {
   generateUniqueInspectionId,
   DEFAULT_INSPECTION_TYPES,
   setupRealtimeSync,
+  getActiveRoom,
+  setActiveRoom,
+  DEFAULT_ROOM_ID,
 } from './utils/storage';
 
 // Components
@@ -30,6 +33,7 @@ import { RecordsView } from './components/Records/RecordsView';
 import { DashboardView } from './components/DashboardView';
 import { RecordDetailModal } from './components/Records/RecordDetailModal';
 import { SubmissionLoadingModal } from './components/SubmissionLoadingModal';
+import { RoomModal } from './components/RoomModal';
 import { CheckCircle2, RefreshCw } from 'lucide-react';
 
 const initialFormData = {
@@ -47,6 +51,8 @@ const initialFormData = {
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'inspecao' | 'registros' | 'dashboard'>('inspecao');
+  const [activeRoom, setActiveRoomState] = useState<string>(() => getActiveRoom());
+  const [isRoomModalOpen, setIsRoomModalOpen] = useState<boolean>(false);
   const [inspections, setInspections] = useState<Inspection[]>(() => getStoredInspections());
   const [formData, setFormData] = useState(initialFormData);
   const [pendingDraft, setPendingDraft] = useState<Partial<Inspection> | null>(null);
@@ -63,12 +69,13 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
-  const [syncToast, setSyncToast] = useState<{ message: string; count: number; time: string } | null>(null);
+  const [syncToast, setSyncToast] = useState<{ message: string; count: number; time: string; room?: string } | null>(null);
 
-  const syncDatabase = useCallback(async (showIndicator = false) => {
+  const syncDatabase = useCallback(async (showIndicator = false, roomId?: string) => {
     if (showIndicator) setIsSyncing(true);
+    const targetRoom = roomId || activeRoom;
     try {
-      const serverData = await fetchServerInspections();
+      const serverData = await fetchServerInspections(false, targetRoom);
       if (serverData && Array.isArray(serverData)) {
         setInspections(serverData);
       }
@@ -79,13 +86,13 @@ export default function App() {
         setTimeout(() => setIsSyncing(false), 800);
       }
     }
-  }, []);
+  }, [activeRoom]);
 
   // Multiplatform Manual Sync Handler
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      const result = await fullMultiplatformSync();
+      const result = await fullMultiplatformSync(activeRoom);
       if (result.success) {
         setInspections(result.inspections);
         setLastSyncTime(result.timestamp);
@@ -93,6 +100,7 @@ export default function App() {
           message: result.message,
           count: result.total,
           time: result.timestamp,
+          room: result.room,
         });
         setTimeout(() => {
           setSyncToast(null);
@@ -105,9 +113,23 @@ export default function App() {
     }
   };
 
+  const handleRoomChange = (newRoom: string) => {
+    const cleanId = (newRoom || DEFAULT_ROOM_ID).toLowerCase();
+    setActiveRoom(cleanId);
+    setActiveRoomState(cleanId);
+    syncDatabase(true, cleanId);
+    setSyncToast({
+      message: `Conectado à sala: ${cleanId}`,
+      count: inspections.length,
+      time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      room: cleanId,
+    });
+    setTimeout(() => setSyncToast(null), 4000);
+  };
+
   // Initial load, Server-Sent Events (SSE) live broadcast, and Polling fallback
   useEffect(() => {
-    syncDatabase(true);
+    syncDatabase(true, activeRoom);
 
     // Check for existing draft
     const draft = getSavedDraft();
@@ -117,34 +139,40 @@ export default function App() {
 
     // 1. Instant Real-Time Sync via Server-Sent Events (SSE)
     // Any addition, edit, deletion, or restore on ANY browser immediately updates all connected devices
-    const unsubscribeSSE = setupRealtimeSync((updatedInspections) => {
-      setInspections(updatedInspections);
-      setIsSyncing(true);
-      setTimeout(() => setIsSyncing(false), 400);
+    const unsubscribeSSE = setupRealtimeSync(
+      (updatedInspections) => {
+        setInspections(updatedInspections);
+        setIsSyncing(true);
+        setTimeout(() => setIsSyncing(false), 400);
 
-      // Keep detail modal updated or closed if deleted by another user
-      setViewingInspection((currentViewing) => {
-        if (!currentViewing) return null;
-        const stillExists = updatedInspections.find(
-          (i) => i.id === currentViewing.id || i.uuid === currentViewing.uuid
-        );
-        return stillExists || null;
-      });
-    });
+        // Keep detail modal updated or closed if deleted by another user
+        setViewingInspection((currentViewing) => {
+          if (!currentViewing) return null;
+          const stillExists = updatedInspections.find(
+            (i) => i.id === currentViewing.id || i.uuid === currentViewing.uuid
+          );
+          return stillExists || null;
+        });
+      },
+      undefined,
+      (status) => {
+        setIsOnline(status === 'online');
+      }
+    );
 
     // 2. Fallback polling every 5 seconds to guarantee 100% sync consistency
     const pollInterval = setInterval(() => {
-      syncDatabase(false);
+      syncDatabase(false, activeRoom);
     }, 5000);
 
     // Sync on window focus / re-entry
-    const handleFocus = () => syncDatabase(false);
+    const handleFocus = () => syncDatabase(false, activeRoom);
     window.addEventListener('focus', handleFocus);
 
     // Network listeners
     const handleOnline = () => {
       setIsOnline(true);
-      syncDatabase(true);
+      syncDatabase(true, activeRoom);
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -158,7 +186,7 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [syncDatabase]);
+  }, [syncDatabase, activeRoom]);
 
   // Auto-save draft on every change
   useEffect(() => {
@@ -240,6 +268,8 @@ export default function App() {
     const completedInspection: Inspection = {
       id: newId,
       uuid: newUuid,
+      roomId: activeRoom || DEFAULT_ROOM_ID,
+      sala: activeRoom || DEFAULT_ROOM_ID,
       timestamp: timestamp,
       status: 'concluida',
       dataCriacao: formattedNow,
@@ -362,6 +392,8 @@ export default function App() {
         }}
         onNewInspection={handleNewInspection}
         hasDraft={hasDraftActive}
+        activeRoom={activeRoom}
+        onOpenRoomModal={() => setIsRoomModalOpen(true)}
       />
 
       {/* 2. Main Content Area */}
@@ -385,6 +417,8 @@ export default function App() {
                 onChange={(updated) => setFormData((prev) => ({ ...prev, ...updated }))}
                 onSubmit={handleSubmitInspection}
                 onReset={handleResetForm}
+                activeRoom={activeRoom}
+                onOpenRoomModal={() => setIsRoomModalOpen(true)}
               />
             )}
           </div>
@@ -396,11 +430,13 @@ export default function App() {
             inspections={inspections}
             onNewInspection={handleNewInspection}
             onDeleteInspection={handleDeleteInspection}
-            onReloadInspections={() => syncDatabase(true)}
+            onReloadInspections={() => syncDatabase(true, activeRoom)}
             onSync={handleManualSync}
             isSyncing={isSyncing}
             lastSyncTime={lastSyncTime}
             isOnline={isOnline}
+            activeRoom={activeRoom}
+            onOpenRoomModal={() => setIsRoomModalOpen(true)}
           />
         )}
 
@@ -438,6 +474,14 @@ export default function App() {
           onClose={() => setViewingInspection(null)}
         />
       )}
+
+      {/* 6. Inspection Room Management & Switcher Modal */}
+      <RoomModal
+        isOpen={isRoomModalOpen}
+        onClose={() => setIsRoomModalOpen(false)}
+        onRoomChanged={handleRoomChange}
+        totalCurrentInspections={inspections.length}
+      />
     </div>
   );
 }

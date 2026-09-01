@@ -51,10 +51,24 @@ export interface Inspection {
   // Etapa 5: Localização
   localizacao?: GPSLocation;
   
+  // Sala / Room ID central
+  roomId?: string;
+  sala?: string;
+  
   // Metadados
   criadoPor?: string;
   versaoApp?: string;
   sincronizado?: boolean;
+}
+
+export interface InspectionRoom {
+  id: string; // e.g. "tecnico@inspecaopronto.com"
+  name: string;
+  email: string;
+  createdAt: string;
+  description?: string;
+  isDefault?: boolean;
+  totalInspections?: number;
 }
 
 export type InspectionStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;

@@ -16,11 +16,12 @@ import {
   RotateCcw,
   Sparkles,
   X,
+  KeyRound,
 } from 'lucide-react';
 import { InspectionPhoto, GPSLocation } from '../types/inspection';
 import { processInspectionImage } from '../utils/imageProcessor';
 import { captureCurrentLocation, getMapsUrl, getOsmEmbedUrl } from '../utils/geo';
-import { getStoredInspectionTypes } from '../utils/storage';
+import { getStoredInspectionTypes, DEFAULT_ROOM_ID } from '../utils/storage';
 import { PhotoLightbox } from './PhotoLightbox';
 
 interface SingleInspectionFormData {
@@ -41,6 +42,8 @@ interface SingleInspectionFormProps {
   onChange: (updated: Partial<SingleInspectionFormData>) => void;
   onSubmit: () => Promise<void>;
   onReset: () => void;
+  activeRoom?: string;
+  onOpenRoomModal?: () => void;
 }
 
 export const SingleInspectionForm: React.FC<SingleInspectionFormProps> = ({
@@ -48,8 +51,11 @@ export const SingleInspectionForm: React.FC<SingleInspectionFormProps> = ({
   onChange,
   onSubmit,
   onReset,
+  activeRoom,
+  onOpenRoomModal,
 }) => {
   const [inspectionTypes] = useState<string[]>(() => getStoredInspectionTypes());
+  const currentRoom = activeRoom || DEFAULT_ROOM_ID;
 
   // Photos state
   const [isProcessingPhotos, setIsProcessingPhotos] = useState(false);
@@ -221,13 +227,25 @@ export const SingleInspectionForm: React.FC<SingleInspectionFormProps> = ({
       />
 
       {/* Top Header Card */}
-      <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-3.5 sm:p-5 shadow-xl flex items-center justify-between gap-2 sm:gap-4">
+      <div className="bg-[#0A1D3D] border border-[#12346B] rounded-none p-3.5 sm:p-5 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-base sm:text-2xl font-black text-[#FFFFFF] tracking-tight">
-            REGISTRO DE INSPEÇÃO
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-base sm:text-2xl font-black text-[#FFFFFF] tracking-tight">
+              REGISTRO DE INSPEÇÃO
+            </h1>
+            <button
+              type="button"
+              onClick={onOpenRoomModal}
+              className="px-2 py-0.5 bg-[#0F1726] border border-amber-500/40 hover:border-amber-400 text-amber-300 text-[10px] sm:text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Clique para gerenciar a sala de armazenamento das inspeções"
+            >
+              <KeyRound className="w-3 h-3 text-amber-400 shrink-0" />
+              <span>Sala:</span>
+              <span className="font-mono text-white underline">{currentRoom}</span>
+            </button>
+          </div>
           <p className="text-[10px] sm:text-xs text-[#A7B0C2] mt-0.5">
-            Preencha os dados, anexe as fotos e conclua o envio em uma única tela.
+            Preencha os dados, anexe as fotos e conclua o envio em uma única tela. Registros salvos na sala central.
           </p>
         </div>
 
