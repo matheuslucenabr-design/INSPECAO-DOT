@@ -1,11 +1,22 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, disableNetwork, setLogLevel } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import { getFirestore, setLogLevel } from 'firebase/firestore';
+import bundledConfig from '../firebase-applet-config.json';
 
-// Silence internal debug/error retry logging to prevent console pollution during quota resets
+// Silence verbose internal logs
 try {
-  setLogLevel('silent');
+  setLogLevel('error');
 } catch {}
+
+// Merge config from environment variables (Vercel) or bundled config JSON
+const firebaseConfig = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || bundledConfig.projectId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || bundledConfig.appId,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || bundledConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || bundledConfig.authDomain,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || bundledConfig.firestoreDatabaseId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || bundledConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || bundledConfig.messagingSenderId,
+};
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
@@ -15,17 +26,6 @@ export const db =
     ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
     : getFirestore(app);
 
-// If client was previously marked as exceeding quota or on initial mount during quota exhausted period,
-// disable network immediately to avoid startup backoff loops
-if (typeof window !== 'undefined') {
-  try {
-    const quotaUntil = localStorage.getItem('firestore_quota_exceeded_until');
-    // If quota flag is set OR free-tier quota exhausted, disable network gracefully
-    if (!quotaUntil || Number(quotaUntil) > Date.now()) {
-      disableNetwork(db).catch(() => {});
-    }
-  } catch {}
-}
+export { app, firebaseConfig };
 
-export { app };
 
