@@ -11,7 +11,6 @@ import {
   setDoc,
   deleteDoc,
   onSnapshot,
-  disableNetwork,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Inspection, InspectionRoom } from '../types/inspection';
@@ -29,6 +28,23 @@ const STORAGE_FALLBACK_KEY = 'inspecao_pronto_records_v3';
 const STORAGE_DELETED_IDS_KEY = 'inspecao_pronto_deleted_ids_v3';
 const STORAGE_DRAFT_KEY = 'inspecao_pronto_draft_v1';
 const STORAGE_TYPES_KEY = 'inspecao_pronto_types_v1';
+
+/**
+ * Safe JSON fetch helper that gracefully handles Vercel static routing (where unmatched
+ * /api routes return HTML index.html) and non-200 responses without throwing JSON parse errors.
+ */
+export async function safeFetchJson<T = any>(url: string, options?: RequestInit): Promise<T | null> {
+  try {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+    if (response.ok && contentType.includes('application/json')) {
+      return (await response.json()) as T;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export const DEFAULT_ROOMS: InspectionRoom[] = [
   {
@@ -69,13 +85,10 @@ export function setActiveRoom(roomId: string): void {
  */
 export async function fetchServerRooms(): Promise<InspectionRoom[]> {
   try {
-    const response = await fetch('/api/rooms');
-    if (response.ok) {
-      const data = await response.json();
-      if (data && Array.isArray(data.rooms) && data.rooms.length > 0) {
-        localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(data.rooms));
-        return data.rooms;
-      }
+    const data = await safeFetchJson<{ rooms: InspectionRoom[] }>('/api/rooms');
+    if (data && Array.isArray(data.rooms) && data.rooms.length > 0) {
+      localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(data.rooms));
+      return data.rooms;
     }
   } catch (e) {
     console.debug('Servidor local de salas não alcançável (esperado no Vercel):', e);
@@ -134,26 +147,21 @@ export async function createRemoteRoom(room: { id: string; name?: string; email?
   };
 
   // 1. Save to Firebase Firestore (Global persistence on Vercel)
-  if (canWriteToFirestore()) {
-    try {
-      await setDoc(doc(db, 'rooms', cleanId), newRoom, { merge: true });
-    } catch (err) {
-      handleFirestoreError(err, 'createRemoteRoom:firestore');
-    }
+  try {
+    await setDoc(doc(db, 'rooms', cleanId), newRoom, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, 'createRemoteRoom:firestore');
   }
 
   // 2. Also try Central Express server if available
   try {
-    const response = await fetch('/api/rooms', {
+    const data = await safeFetchJson<{ room: InspectionRoom }>('/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newRoom),
     });
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.room) {
-        return data.room;
-      }
+    if (data && data.room) {
+      return data.room;
     }
   } catch (err) {
     console.debug('Aviso ao registrar sala no backend local (esperado no Vercel):', err);
@@ -477,60 +485,13 @@ export function saveAllInspections(inspections: Inspection[], pushToServer: bool
 
 // ---------------- FIREBASE FIRESTORE INTEGRATION & QUOTA PROTECTION ---------------- //
 
-const QUOTA_STORAGE_KEY = 'firestore_quota_exceeded_until';
-let isFirestoreWriteQuotaExceeded = false;
-let quotaExceededResetTimestamp = 0;
-
-if (typeof window !== 'undefined') {
-  try {
-    const until = localStorage.getItem(QUOTA_STORAGE_KEY);
-    if (until && Number(until) > Date.now()) {
-      isFirestoreWriteQuotaExceeded = true;
-      quotaExceededResetTimestamp = Number(until);
-    } else {
-      isFirestoreWriteQuotaExceeded = false;
-      quotaExceededResetTimestamp = 0;
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-    }
-  } catch {}
-}
-
 export function handleFirestoreError(err: any, context: string): void {
   const errMsg = String(err?.message || err?.code || err || '');
-  if (
-    errMsg.includes('resource-exhausted') ||
-    errMsg.includes('Quota limit exceeded') ||
-    errMsg.includes('Free daily write units') ||
-    errMsg.includes('Free daily read units') ||
-    errMsg.includes('quota metric')
-  ) {
-    isFirestoreWriteQuotaExceeded = true;
-    quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000;
-    try {
-      localStorage.setItem(QUOTA_STORAGE_KEY, String(quotaExceededResetTimestamp));
-    } catch {}
-    disableNetwork(db).catch(() => {});
-  } else {
-    console.debug(`[Firestore ${context}]`, err);
-  }
+  console.debug(`[Firestore ${context}]`, errMsg);
 }
 
 export function canWriteToFirestore(): boolean {
-  try {
-    const until = localStorage.getItem(QUOTA_STORAGE_KEY);
-    if (until && Number(until) > Date.now()) {
-      return false;
-    }
-  } catch {}
-  if (!isFirestoreWriteQuotaExceeded) return true;
-  if (Date.now() > quotaExceededResetTimestamp) {
-    isFirestoreWriteQuotaExceeded = false;
-    try {
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-    } catch {}
-    return true;
-  }
-  return false;
+  return true;
 }
 
 export function sanitizeForFirestore<T>(data: T): T {
@@ -563,26 +524,20 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
   let backendItems: Inspection[] | null = null;
   let firestoreItems: Inspection[] = [];
 
-  // 1. Fetch all records from Central Express Server database
+  // 1. Fetch all records from Central Express Server database (safe against Vercel HTML fallback)
   try {
-    const response = await fetch(`/api/inspections`, {
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-    if (response.ok) {
-      const data = await response.json();
-      // Ensure any active inspection returned by server is un-marked from deleted set
-      if (data && Array.isArray(data.inspections)) {
+    const data = await safeFetchJson<{ inspections?: Inspection[]; deletedIds?: string[] }>('/api/inspections');
+    if (data) {
+      if (Array.isArray(data.inspections)) {
         data.inspections.forEach((insp: any) => {
           if (insp.id) unmarkAsDeleted(insp.id);
           if (insp.uuid) unmarkAsDeleted(insp.uuid);
         });
       }
-      if (data && Array.isArray(data.deletedIds)) {
+      if (Array.isArray(data.deletedIds)) {
         markAsPermanentlyDeleted(...data.deletedIds);
       }
-      if (data && Array.isArray(data.inspections)) {
+      if (Array.isArray(data.inspections)) {
         backendItems = data.inspections.filter(
           (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
         );
@@ -593,39 +548,43 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
   }
 
   // 2. Fallback to Firebase Firestore if backend wasn't reachable (e.g. standalone Vercel preview)
-  if (backendItems === null && canWriteToFirestore()) {
+  if (backendItems === null) {
     try {
-      const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
-      deletedSnap.forEach((d) => {
-        markAsPermanentlyDeleted(d.id);
-      });
+      const deletedSnap = await promiseWithTimeout(getDocs(collection(db, 'deleted_inspections')), 3000, null);
+      if (deletedSnap) {
+        deletedSnap.forEach((d) => {
+          markAsPermanentlyDeleted(d.id);
+        });
+      }
     } catch (err) {
       handleFirestoreError(err, 'fetchServerInspections:deleted');
     }
 
     try {
-      const querySnapshot = await getDocs(collection(db, 'inspections'));
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data() as Inspection;
-        const docId = docSnap.id;
-        const itemUuid = data?.uuid || data?.id || docId;
+      const querySnapshot = await promiseWithTimeout(getDocs(collection(db, 'inspections')), 3500, null);
+      if (querySnapshot) {
+        querySnapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Inspection;
+          const docId = docSnap.id;
+          const itemUuid = data?.uuid || data?.id || docId;
 
-        if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
-          return;
-        }
+          if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+            return;
+          }
 
-        const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
+          const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
 
-        if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
-          firestoreItems.push({
-            ...data,
-            id: data.id || docId,
-            uuid: itemUuid,
-            roomId: itemRoom,
-            sala: itemRoom,
-          });
-        }
-      });
+          if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
+            firestoreItems.push({
+              ...data,
+              id: data.id || docId,
+              uuid: itemUuid,
+              roomId: itemRoom,
+              sala: itemRoom,
+            });
+          }
+        });
+      }
     } catch (firebaseErr) {
       handleFirestoreError(firebaseErr, 'fetchServerInspections:inspections');
     }
@@ -647,7 +606,7 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
     return authoritativeList;
   }
 
-  // Offline fallback
+  // Offline/local cache fallback
   return getStoredInspections();
 }
 
@@ -682,10 +641,10 @@ export async function saveInspection(
 
   const safeData = sanitizeForFirestore(updatedInspection);
 
-  // 1. Immediately save to Central Server Database (Primary persistence and instant redistribution)
-  if (onProgress) onProgress(2, 'Gravando no servidor central e redistribuindo para todos os dispositivos...');
+  // 1. Immediately save to Central Server Database if backend exists
+  if (onProgress) onProgress(2, 'Gravando no banco central e sincronizando na nuvem...');
   try {
-    const response = await fetch('/api/inspections', {
+    const result = await safeFetchJson<{ inspections?: Inspection[] }>('/api/inspections', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -693,14 +652,11 @@ export async function saveInspection(
       },
       body: JSON.stringify(safeData),
     });
-    if (response.ok) {
-      const result = await response.json();
-      if (result && Array.isArray(result.inspections)) {
-        inMemoryInspections = sortInspectionsDescending(result.inspections);
-      }
+    if (result && Array.isArray(result.inspections)) {
+      inMemoryInspections = sortInspectionsDescending(result.inspections);
     }
   } catch (serverErr) {
-    console.debug('Aviso ao sincronizar com servidor central:', serverErr);
+    console.debug('Aviso ao sincronizar com servidor central (esperado no Vercel):', serverErr);
   }
 
   // 2. Cache locally in memory and IndexedDB immediately
@@ -712,19 +668,15 @@ export async function saveInspection(
   saveAllInspections(updatedList, false);
   await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
 
-  // 3. Background mirror to Firebase Firestore (non-blocking, tolerant to quota limits)
-  if (canWriteToFirestore()) {
-    try {
-      const docRef = doc(db, 'inspections', updatedInspection.id);
-      setDoc(docRef, safeData, { merge: true }).catch((firestoreErr) => {
-        handleFirestoreError(firestoreErr, 'saveInspection:firestore');
-      });
-    } catch (err) {
-      handleFirestoreError(err, 'saveInspection:firestore');
-    }
+  // 3. Mirror directly to Firebase Firestore (Global persistence on Vercel & across devices)
+  try {
+    const docRef = doc(db, 'inspections', updatedInspection.id);
+    await setDoc(docRef, safeData, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, 'saveInspection:firestore');
   }
 
-  if (onProgress) onProgress(4, 'Inspeção gravada no servidor e sincronizada com sucesso!');
+  if (onProgress) onProgress(4, 'Inspeção gravada e sincronizada com sucesso!');
 
   return updatedInspection;
 }
@@ -755,28 +707,26 @@ export async function deleteInspection(idOrUuid: string): Promise<{ success: boo
   }
 
   // 4. Delete from Firebase Firestore & write permanent tombstone
-  if (canWriteToFirestore()) {
-    try {
-      const docRef = doc(db, 'inspections', id);
-      await deleteDoc(docRef);
-      if (uuid && uuid !== id) {
-        await deleteDoc(doc(db, 'inspections', uuid)).catch(() => {});
-      }
-
-      const tombstoneRef = doc(db, 'deleted_inspections', id);
-      await setDoc(tombstoneRef, {
-        id,
-        uuid: uuid || null,
-        deletedAt: new Date().toISOString(),
-      });
-    } catch (firestoreErr) {
-      handleFirestoreError(firestoreErr, 'deleteInspection:firestore');
+  try {
+    const docRef = doc(db, 'inspections', id);
+    await deleteDoc(docRef);
+    if (uuid && uuid !== id) {
+      await deleteDoc(doc(db, 'inspections', uuid)).catch(() => {});
     }
+
+    const tombstoneRef = doc(db, 'deleted_inspections', id);
+    await setDoc(tombstoneRef, {
+      id,
+      uuid: uuid || null,
+      deletedAt: new Date().toISOString(),
+    });
+  } catch (firestoreErr) {
+    handleFirestoreError(firestoreErr, 'deleteInspection:firestore');
   }
 
   // 5. Call Central Server DELETE endpoint if available
   try {
-    await fetch(`/api/inspections/${encodeURIComponent(id)}`, {
+    await safeFetchJson(`/api/inspections/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   } catch (err) {
@@ -890,7 +840,6 @@ export function setupRealtimeSync(
 
       eventSource.addEventListener('connected', () => {
         if (onStatusChange) onStatusChange('online');
-        // Instantly fetch all inspections from the server to guarantee full sync on connect
         fetchServerInspections().then((all) => {
           if (Array.isArray(all) && all.length > 0) {
             onInspectionsUpdate(all);
@@ -909,7 +858,6 @@ export function setupRealtimeSync(
               markAsPermanentlyDeleted(...data.deletedIds);
             }
             if (Array.isArray(data.inspections)) {
-              // Ensure any active inspection received from server is un-marked from deleted set
               data.inspections.forEach((insp: any) => {
                 if (insp.id) unmarkAsDeleted(insp.id);
                 if (insp.uuid) unmarkAsDeleted(insp.uuid);
@@ -964,133 +912,143 @@ export function setupRealtimeSync(
       });
 
       eventSource.onerror = () => {
-        if (onStatusChange) onStatusChange('offline');
         if (eventSource) {
           eventSource.close();
           eventSource = null;
         }
         if (!isCleaningUp) {
           clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(connectSSE, 3000);
+          // Periodically check if Express server becomes reachable
+          reconnectTimer = setTimeout(checkAndConnectBackend, 15000);
         }
       };
-    } catch (err) {
-      if (onStatusChange) onStatusChange('offline');
+    } catch {
       if (!isCleaningUp) {
         clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectSSE, 3000);
+        reconnectTimer = setTimeout(checkAndConnectBackend, 15000);
       }
     }
   };
 
-  connectSSE();
+  const checkAndConnectBackend = async () => {
+    if (isCleaningUp) return;
+    const health = await safeFetchJson<{ status: string }>('/api/health');
+    if (health && health.status === 'ok') {
+      connectSSE();
+    } else {
+      // Vercel serverless / static hosting environment:
+      // Realtime sync is handled natively through Firebase Firestore onSnapshot listeners
+      if (onStatusChange) onStatusChange('online');
+    }
+  };
+
+  // Start background connection check
+  checkAndConnectBackend();
 
   // Realtime Firestore listeners for inspections and deleted_inspections (powers instant sync across devices on Vercel)
-  if (canWriteToFirestore()) {
-    try {
-      const deletedRef = collection(db, 'deleted_inspections');
-      unsubscribeDeleted = onSnapshot(
-        deletedRef,
-        (snapshot) => {
-          let hasNewDeletes = false;
-          snapshot.forEach((d) => {
-            if (!deletedIdsSet.has(d.id)) {
-              markAsPermanentlyDeleted(d.id);
-              hasNewDeletes = true;
-            }
-          });
-
-          if (hasNewDeletes) {
-            const activeRoom = getActiveRoom();
-            const current = getStoredInspections();
-            const filtered = current
-              .filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
-              .filter((i) => {
-                const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
-                return activeRoom === 'all' || rId === activeRoom;
-              });
-            inMemoryInspections = filtered;
-            saveAllInspections(filtered, false);
-            onInspectionsUpdate(filtered);
+  try {
+    const deletedRef = collection(db, 'deleted_inspections');
+    unsubscribeDeleted = onSnapshot(
+      deletedRef,
+      (snapshot) => {
+        let hasNewDeletes = false;
+        snapshot.forEach((d) => {
+          if (!deletedIdsSet.has(d.id)) {
+            markAsPermanentlyDeleted(d.id);
+            hasNewDeletes = true;
           }
-        },
-        (error) => {
-          handleFirestoreError(error, 'realtime listener deleted_inspections');
-        }
-      );
+        });
 
-      const inspectionsRef = collection(db, 'inspections');
-      unsubscribeFirestore = onSnapshot(
-        inspectionsRef,
-        (snapshot) => {
-          if (onStatusChange) onStatusChange('online');
+        if (hasNewDeletes) {
           const activeRoom = getActiveRoom();
-          const cloudList: Inspection[] = [];
-          
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as Inspection;
-            const docId = docSnap.id;
-            const itemUuid = data?.uuid || data?.id || docId;
-
-            if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
-              return;
-            }
-
-            const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
-
-            if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
-              cloudList.push({
-                ...data,
-                id: data.id || docId,
-                uuid: itemUuid,
-                roomId: itemRoom,
-                sala: itemRoom,
-              });
-            }
-          });
-
-          if (cloudList.length > 0 || !snapshot.empty) {
-            const sorted = sortInspectionsDescending(cloudList);
-            inMemoryInspections = sorted;
-            saveAllInspections(sorted, false);
-            onInspectionsUpdate(sorted);
-          }
-        },
-        (error) => {
-          handleFirestoreError(error, 'realtime listener inspections');
+          const current = getStoredInspections();
+          const filtered = current
+            .filter((i) => !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
+            .filter((i) => {
+              const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
+              return activeRoom === 'all' || rId === activeRoom;
+            });
+          inMemoryInspections = filtered;
+          saveAllInspections(filtered, false);
+          onInspectionsUpdate(filtered);
         }
-      );
+      },
+      (error) => {
+        handleFirestoreError(error, 'realtime listener deleted_inspections');
+      }
+    );
 
-      const roomsRef = collection(db, 'rooms');
-      const unsubscribeRooms = onSnapshot(
-        roomsRef,
-        (snapshot) => {
-          const rooms: InspectionRoom[] = [];
-          snapshot.forEach((d) => {
-            const r = d.data() as InspectionRoom;
-            if (r && r.id) rooms.push(r);
-          });
-          if (rooms.length > 0) {
-            if (!rooms.some((r) => r.id === DEFAULT_ROOM_ID)) {
-              rooms.unshift(DEFAULT_ROOMS[0]);
-            }
-            localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(rooms));
-            if (onRoomsUpdate) onRoomsUpdate(rooms);
+    const inspectionsRef = collection(db, 'inspections');
+    unsubscribeFirestore = onSnapshot(
+      inspectionsRef,
+      (snapshot) => {
+        if (onStatusChange) onStatusChange('online');
+        const activeRoom = getActiveRoom();
+        const cloudList: Inspection[] = [];
+        
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Inspection;
+          const docId = docSnap.id;
+          const itemUuid = data?.uuid || data?.id || docId;
+
+          if (isIdDeleted(docId) || isIdDeleted(itemUuid) || isIdDeleted(data?.id)) {
+            return;
           }
-        },
-        (err) => {
-          handleFirestoreError(err, 'realtime listener rooms');
-        }
-      );
 
-      const originalCleanup = unsubscribeTypes;
-      unsubscribeTypes = () => {
-        if (originalCleanup) originalCleanup();
-        unsubscribeRooms();
-      };
-    } catch (e) {
-      handleFirestoreError(e, 'setupRealtimeSync:init');
-    }
+          const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
+
+          if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
+            cloudList.push({
+              ...data,
+              id: data.id || docId,
+              uuid: itemUuid,
+              roomId: itemRoom,
+              sala: itemRoom,
+            });
+          }
+        });
+
+        if (cloudList.length > 0 || !snapshot.empty) {
+          const sorted = sortInspectionsDescending(cloudList);
+          inMemoryInspections = sorted;
+          saveAllInspections(sorted, false);
+          onInspectionsUpdate(sorted);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, 'realtime listener inspections');
+      }
+    );
+
+    const roomsRef = collection(db, 'rooms');
+    const unsubscribeRooms = onSnapshot(
+      roomsRef,
+      (snapshot) => {
+        const rooms: InspectionRoom[] = [];
+        snapshot.forEach((d) => {
+          const r = d.data() as InspectionRoom;
+          if (r && r.id) rooms.push(r);
+        });
+        if (rooms.length > 0) {
+          if (!rooms.some((r) => r.id === DEFAULT_ROOM_ID)) {
+            rooms.unshift(DEFAULT_ROOMS[0]);
+          }
+          localStorage.setItem(STORAGE_ROOMS_KEY, JSON.stringify(rooms));
+          if (onRoomsUpdate) onRoomsUpdate(rooms);
+        }
+      },
+      (err) => {
+        handleFirestoreError(err, 'realtime listener rooms');
+      }
+    );
+
+    const originalCleanup = unsubscribeTypes;
+    unsubscribeTypes = () => {
+      if (originalCleanup) originalCleanup();
+      unsubscribeRooms();
+    };
+  } catch (e) {
+    handleFirestoreError(e, 'setupRealtimeSync:init');
   }
 
   return () => {
@@ -1130,7 +1088,7 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
       room: targetRoom,
     };
 
-    const response = await fetch('/api/sync', {
+    const data = await safeFetchJson<{ deletedIds?: string[]; inspections?: Inspection[] }>('/api/sync', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1139,12 +1097,11 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
       body: JSON.stringify(syncPayload),
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      if (data && Array.isArray(data.deletedIds)) {
+    if (data) {
+      if (Array.isArray(data.deletedIds)) {
         markAsPermanentlyDeleted(...data.deletedIds);
       }
-      if (data && Array.isArray(data.inspections)) {
+      if (Array.isArray(data.inspections)) {
         data.inspections.forEach((insp: any) => {
           if (insp.id) unmarkAsDeleted(insp.id);
           if (insp.uuid) unmarkAsDeleted(insp.uuid);
@@ -1160,9 +1117,9 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
 
   // Also sync with Firebase Firestore directly
   let firestoreItems: Inspection[] = [];
-  if (canWriteToFirestore()) {
-    try {
-      const snap = await getDocs(collection(db, 'inspections'));
+  try {
+    const snap = await promiseWithTimeout(getDocs(collection(db, 'inspections')), 3500, null);
+    if (snap) {
       snap.forEach((docSnap) => {
         const data = docSnap.data() as Inspection;
         const docId = docSnap.id;
@@ -1184,9 +1141,9 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
           });
         }
       });
-    } catch (err) {
-      handleFirestoreError(err, 'fullMultiplatformSync:firestore');
     }
+  } catch (err) {
+    handleFirestoreError(err, 'fullMultiplatformSync:firestore');
   }
 
   let finalInspections: Inspection[];

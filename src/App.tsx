@@ -160,13 +160,19 @@ export default function App() {
       }
     );
 
-    // 2. High-frequency polling every 3 seconds to guarantee 100% sync consistency across all browsers
+    // 2. Fallback gentle check (every 45s; real-time instant sync is handled continuously by Firestore & SSE)
     const pollInterval = setInterval(() => {
       syncDatabase(false, activeRoom);
-    }, 3000);
+    }, 45000);
 
-    // Sync on window focus / re-entry
-    const handleFocus = () => syncDatabase(false, activeRoom);
+    // Throttled sync on window focus / re-entry (at most once every 30 seconds)
+    let lastFocusSync = Date.now();
+    const handleFocus = () => {
+      if (Date.now() - lastFocusSync > 30000) {
+        lastFocusSync = Date.now();
+        syncDatabase(false, activeRoom);
+      }
+    };
     window.addEventListener('focus', handleFocus);
 
     // Network listeners

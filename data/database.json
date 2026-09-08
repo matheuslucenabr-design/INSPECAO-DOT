@@ -18,6 +18,34 @@
     "Inspeção de Redes Compartilhadas",
     "Inspeção de 5S"
   ],
-  "deletedIds": [],
-  "lastUpdated": "2026-09-08T22:18:58.099Z"
+  "deletedIds": [
+    "REG-MTDBGKNR-2QRJ1",
+    "c1912647-60a9-42f7-9320-4933c4e367e1",
+    "REG-MTD89BK3-D4W0P",
+    "7680391b-a392-45b9-8be4-27e05e72d88a",
+    "REG-MTCXHE33-TOVKZ",
+    "48e53cea-8927-45c3-b02c-7fe14cbad606",
+    "REG-MTBHO4WN-8CMNP",
+    "b68774bb-a4a9-410e-9ca5-216951816998",
+    "REG-MTHDL8MN-8DHF2",
+    "714df78d-db9b-4734-a407-50cdc10719fa",
+    "REG-MTHDOQRG-2ALGM",
+    "93515c88-7233-48a8-9a91-fd3c50e4ab68",
+    "REG-MTJZL4ZU-SQJTT",
+    "REG-MTILRI4U-305CQ",
+    "REG-MTILMUI2-S6R9D",
+    "REG-MTDH4XC0-9F0GU",
+    "REG-MTDH02M5-TMDDK",
+    "REG-MTK2YKCK-UTSWB",
+    "REG-MTK2Z5XH-9MSLE",
+    "REG-MTK2ZITN-EW60Y",
+    "REG-MTK33QKW-44VQ7",
+    "REG-MTK8RT6B-QL5AV",
+    "TEST-1",
+    "INSP-TEST-SYNC-1",
+    "uuid-sync-1",
+    "INSP-MULTISYNC-001",
+    "uuid-multisync-001"
+  ],
+  "lastUpdated": "2026-09-08T22:27:48.549Z"
 }
