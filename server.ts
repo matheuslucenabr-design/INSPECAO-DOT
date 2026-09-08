@@ -312,13 +312,24 @@ async function startServer() {
     }
   });
 
-  // API: Get all inspections and deleted IDs from central system database (filtered by room if specified)
+  // API: Get all inspections and deleted IDs from central system database
+  // By default, returns all saved inspections so all devices and platforms share the same data
   app.get('/api/inspections', (req, res) => {
+    const filterRoom = req.query.filterRoom === 'true';
     const requestedRoom = (req.query.room as string || req.headers['x-room-id'] as string || '').trim().toLowerCase();
-    
-    let filteredInspections = dbMemory.inspections;
-    if (requestedRoom && requestedRoom !== 'all') {
-      filteredInspections = dbMemory.inspections.filter((insp) => {
+
+    // Clean up any deletedIds that match active inspections in server memory
+    const activeIds = new Set(dbMemory.inspections.map((i) => i.id));
+    const activeUuids = new Set(dbMemory.inspections.map((i) => i.uuid).filter(Boolean));
+    if (Array.isArray(dbMemory.deletedIds)) {
+      dbMemory.deletedIds = dbMemory.deletedIds.filter(
+        (id) => !activeIds.has(id) && !activeUuids.has(id)
+      );
+    }
+
+    let inspectionsToReturn = dbMemory.inspections;
+    if (filterRoom && requestedRoom && requestedRoom !== 'all') {
+      inspectionsToReturn = dbMemory.inspections.filter((insp) => {
         const itemRoom = (insp.roomId || insp.sala || DEFAULT_ROOM_ID).toLowerCase();
         return itemRoom === requestedRoom;
       });
@@ -327,8 +338,9 @@ async function startServer() {
     res.json({
       success: true,
       room: requestedRoom || DEFAULT_ROOM_ID,
-      total: filteredInspections.length,
-      inspections: filteredInspections,
+      total: inspectionsToReturn.length,
+      totalAll: dbMemory.inspections.length,
+      inspections: inspectionsToReturn,
       deletedIds: dbMemory.deletedIds || [],
       lastUpdated: dbMemory.lastUpdated,
     });
@@ -343,18 +355,31 @@ async function startServer() {
   });
 
   // API: Save or update an inspection in central system database
+  // Automatically persists and redistributes to all connected clients in real time
   app.post('/api/inspections', (req, res) => {
     try {
       const inspection: Inspection = req.body;
-      if (!inspection || !inspection.id) {
+      if (!inspection || (!inspection.id && !inspection.uuid)) {
         res.status(400).json({ success: false, error: 'Dados de inspeção inválidos' });
         return;
+      }
+
+      // Ensure stable id and uuid
+      if (!inspection.id) {
+        inspection.id = inspection.uuid || `REG-${Date.now()}`;
+      }
+      if (!inspection.uuid) {
+        inspection.uuid = inspection.id;
       }
 
       // Assign room
       const targetRoom = (inspection.roomId || inspection.sala || (req.query.room as string) || DEFAULT_ROOM_ID).trim().toLowerCase();
       inspection.roomId = targetRoom;
       inspection.sala = targetRoom;
+      inspection.sincronizado = true;
+      if (!inspection.updatedAt) {
+        inspection.updatedAt = new Date().toISOString();
+      }
 
       // Ensure room exists in dbMemory.rooms
       if (!dbMemory.rooms) dbMemory.rooms = [...DEFAULT_ROOMS];
@@ -368,8 +393,8 @@ async function startServer() {
         });
       }
 
-      // If user submits a newly saved inspection, ensure it is no longer marked deleted
-      if (dbMemory.deletedIds) {
+      // If user submits a newly saved inspection, ensure it is un-marked from deletedIds
+      if (Array.isArray(dbMemory.deletedIds)) {
         dbMemory.deletedIds = dbMemory.deletedIds.filter(
           (dId) => dId !== inspection.id && dId !== inspection.uuid
         );
@@ -396,16 +421,17 @@ async function startServer() {
         inspectionId: savedItem.id,
         inspection: savedItem,
         inspections: dbMemory.inspections,
-        deletedIds: dbMemory.deletedIds,
+        deletedIds: dbMemory.deletedIds || [],
         total: dbMemory.inspections.length,
         lastUpdated: dbMemory.lastUpdated,
       });
 
       res.json({
         success: true,
-        message: 'Inspeção gravada com sucesso no banco de dados central do sistema',
+        message: 'Inspeção gravada com sucesso no banco de dados central do sistema e redistribuída para todas as plataformas',
         room: savedItem.roomId,
         inspection: savedItem,
+        inspections: dbMemory.inspections,
         total: dbMemory.inspections.length,
       });
     } catch (err: any) {
@@ -606,28 +632,33 @@ async function startServer() {
         });
       }
 
+      // Clean up deletedIds so active inspections are never suppressed
+      const activeIds = new Set(dbMemory.inspections.map((i) => i.id));
+      const activeUuids = new Set(dbMemory.inspections.map((i) => i.uuid).filter(Boolean));
+      if (Array.isArray(dbMemory.deletedIds)) {
+        dbMemory.deletedIds = dbMemory.deletedIds.filter(
+          (id) => !activeIds.has(id) && !activeUuids.has(id)
+        );
+      }
+
       if (hasChanges || (Array.isArray(deletedIds) && deletedIds.length > 0)) {
         persistDatabase();
         broadcastRealtimeUpdate('database_update', {
           action: 'sync',
-          roomId: targetRoom || DEFAULT_ROOM_ID,
           inspections: dbMemory.inspections,
-          deletedIds: dbMemory.deletedIds,
+          deletedIds: dbMemory.deletedIds || [],
           total: dbMemory.inspections.length,
           lastUpdated: dbMemory.lastUpdated,
         });
       }
 
-      const filteredForResponse = targetRoom && targetRoom !== 'all'
-        ? dbMemory.inspections.filter((i) => (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase() === targetRoom)
-        : dbMemory.inspections;
-
+      // Return the full authoritative list of all inspections
       res.json({
         success: true,
         room: targetRoom || DEFAULT_ROOM_ID,
-        inspections: filteredForResponse,
+        inspections: dbMemory.inspections,
         deletedIds: dbMemory.deletedIds || [],
-        total: filteredForResponse.length,
+        total: dbMemory.inspections.length,
         totalAllRooms: dbMemory.inspections.length,
         lastUpdated: dbMemory.lastUpdated,
         message: 'Sincronização multiplataforma concluída com sucesso',
@@ -636,6 +667,17 @@ async function startServer() {
       console.error('Error during /api/sync:', err);
       res.status(500).json({ success: false, error: err.message || 'Erro durante sincronização' });
     }
+  });
+
+  // API: Quick GET Sync endpoint for instant polling
+  app.get('/api/sync', (req, res) => {
+    res.json({
+      success: true,
+      inspections: dbMemory.inspections,
+      deletedIds: dbMemory.deletedIds || [],
+      total: dbMemory.inspections.length,
+      lastUpdated: dbMemory.lastUpdated,
+    });
   });
 
   // API: Health / System status

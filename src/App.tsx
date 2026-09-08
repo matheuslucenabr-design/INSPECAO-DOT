@@ -160,10 +160,10 @@ export default function App() {
       }
     );
 
-    // 2. Fallback polling every 5 seconds to guarantee 100% sync consistency
+    // 2. High-frequency polling every 3 seconds to guarantee 100% sync consistency across all browsers
     const pollInterval = setInterval(() => {
       syncDatabase(false, activeRoom);
-    }, 5000);
+    }, 3000);
 
     // Sync on window focus / re-entry
     const handleFocus = () => syncDatabase(false, activeRoom);

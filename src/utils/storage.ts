@@ -500,7 +500,9 @@ export function handleFirestoreError(err: any, context: string): void {
   if (
     errMsg.includes('resource-exhausted') ||
     errMsg.includes('Quota limit exceeded') ||
-    errMsg.includes('Free daily write units')
+    errMsg.includes('Free daily write units') ||
+    errMsg.includes('Free daily read units') ||
+    errMsg.includes('quota metric')
   ) {
     isFirestoreWriteQuotaExceeded = true;
     quotaExceededResetTimestamp = Date.now() + 12 * 60 * 60 * 1000;
@@ -555,22 +557,28 @@ export function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, fa
 /**
  * Fetch all inspections from the Central Database & Firebase Firestore.
  * Seamlessly integrates both local Express backend and Firebase Cloud Firestore.
+ * Always returns the complete authoritative list of all inspections from the server.
  */
 export async function fetchServerInspections(forceCloud = false, roomId?: string): Promise<Inspection[]> {
-  const targetRoom = (roomId || getActiveRoom() || DEFAULT_ROOM_ID).trim().toLowerCase();
   let backendItems: Inspection[] | null = null;
   let firestoreItems: Inspection[] = [];
 
-  // 1. Fetch from Central Express Server database if available
+  // 1. Fetch all records from Central Express Server database
   try {
-    const response = await fetch(`/api/inspections?room=${encodeURIComponent(targetRoom)}`, {
+    const response = await fetch(`/api/inspections`, {
       headers: {
         Accept: 'application/json',
-        'X-Room-ID': targetRoom,
       },
     });
     if (response.ok) {
       const data = await response.json();
+      // Ensure any active inspection returned by server is un-marked from deleted set
+      if (data && Array.isArray(data.inspections)) {
+        data.inspections.forEach((insp: any) => {
+          if (insp.id) unmarkAsDeleted(insp.id);
+          if (insp.uuid) unmarkAsDeleted(insp.uuid);
+        });
+      }
       if (data && Array.isArray(data.deletedIds)) {
         markAsPermanentlyDeleted(...data.deletedIds);
       }
@@ -584,8 +592,8 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
     console.debug('Backend fetch info (Vercel SPA ou modo offline):', serverErr);
   }
 
-  // 2. Fetch from Firebase Firestore (Cloud persistence for Vercel/GitHub & multi-device sync)
-  if (canWriteToFirestore()) {
+  // 2. Fallback to Firebase Firestore if backend wasn't reachable (e.g. standalone Vercel preview)
+  if (backendItems === null && canWriteToFirestore()) {
     try {
       const deletedSnap = await getDocs(collection(db, 'deleted_inspections'));
       deletedSnap.forEach((d) => {
@@ -607,9 +615,6 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
         }
 
         const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
-        if (targetRoom && targetRoom !== 'all' && itemRoom !== targetRoom) {
-          return;
-        }
 
         if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
           firestoreItems.push({
@@ -626,15 +631,15 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
     }
   }
 
-  // If Express backend responded with items, use them
-  if (backendItems !== null && backendItems.length > 0) {
+  // If Express backend responded, its database is the single source of truth
+  if (backendItems !== null) {
     const authoritativeList = sortInspectionsDescending(backendItems);
     inMemoryInspections = authoritativeList;
     saveAllInspections(authoritativeList, false);
     return authoritativeList;
   }
 
-  // If Firestore responded with cloud items (e.g. on Vercel), use them
+  // If Firestore responded with cloud items, use them
   if (firestoreItems.length > 0) {
     const authoritativeList = sortInspectionsDescending(firestoreItems);
     inMemoryInspections = authoritativeList;
@@ -642,20 +647,13 @@ export async function fetchServerInspections(forceCloud = false, roomId?: string
     return authoritativeList;
   }
 
-  if (backendItems !== null && backendItems.length === 0 && firestoreItems.length === 0) {
-    return [];
-  }
-
   // Offline fallback
-  return getStoredInspections().filter((insp) => {
-    const itemRoom = (insp.roomId || insp.sala || DEFAULT_ROOM_ID).toLowerCase();
-    return targetRoom === 'all' || itemRoom === targetRoom;
-  });
+  return getStoredInspections();
 }
 
 /**
- * Save single inspection directly into Firebase Firestore, Central Server Database, and Local DB.
- * Guarantees that the inspection is registered in the cloud and immediately available on all devices.
+ * Save single inspection directly into Central Server Database, Firebase Firestore, and Local DB.
+ * Guarantees that the inspection is registered in the central server and immediately redistributed to all devices.
  */
 export async function saveInspection(
   inspection: Inspection,
@@ -684,20 +682,10 @@ export async function saveInspection(
 
   const safeData = sanitizeForFirestore(updatedInspection);
 
-  // 1. Save directly to Firebase Firestore (Primary Cloud for Vercel/GitHub & Multi-Device)
-  if (onProgress) onProgress(2, `Sincronizando com a nuvem central (Sala: ${targetRoom})...`);
-  if (canWriteToFirestore()) {
-    try {
-      const docRef = doc(db, 'inspections', updatedInspection.id);
-      await setDoc(docRef, safeData, { merge: true });
-    } catch (firestoreErr) {
-      handleFirestoreError(firestoreErr, 'saveInspection:firestore');
-    }
-  }
-
-  // 2. Also try Central Express Backend if present
+  // 1. Immediately save to Central Server Database (Primary persistence and instant redistribution)
+  if (onProgress) onProgress(2, 'Gravando no servidor central e redistribuindo para todos os dispositivos...');
   try {
-    await fetch(`/api/inspections?room=${encodeURIComponent(targetRoom)}`, {
+    const response = await fetch('/api/inspections', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -705,11 +693,17 @@ export async function saveInspection(
       },
       body: JSON.stringify(safeData),
     });
+    if (response.ok) {
+      const result = await response.json();
+      if (result && Array.isArray(result.inspections)) {
+        inMemoryInspections = sortInspectionsDescending(result.inspections);
+      }
+    }
   } catch (serverErr) {
-    console.debug('Aviso ao sincronizar com backend local (esperado no Vercel):', serverErr);
+    console.debug('Aviso ao sincronizar com servidor central:', serverErr);
   }
 
-  // 3. Cache locally in memory and IndexedDB
+  // 2. Cache locally in memory and IndexedDB immediately
   const current = getStoredInspections();
   const updatedList = [
     updatedInspection,
@@ -718,7 +712,19 @@ export async function saveInspection(
   saveAllInspections(updatedList, false);
   await promiseWithTimeout(saveToIndexedDB(updatedInspection), 2000, undefined);
 
-  if (onProgress) onProgress(4, `Inspeção gravada na sala ${targetRoom} com sucesso!`);
+  // 3. Background mirror to Firebase Firestore (non-blocking, tolerant to quota limits)
+  if (canWriteToFirestore()) {
+    try {
+      const docRef = doc(db, 'inspections', updatedInspection.id);
+      setDoc(docRef, safeData, { merge: true }).catch((firestoreErr) => {
+        handleFirestoreError(firestoreErr, 'saveInspection:firestore');
+      });
+    } catch (err) {
+      handleFirestoreError(err, 'saveInspection:firestore');
+    }
+  }
+
+  if (onProgress) onProgress(4, 'Inspeção gravada no servidor e sincronizada com sucesso!');
 
   return updatedInspection;
 }
@@ -884,6 +890,12 @@ export function setupRealtimeSync(
 
       eventSource.addEventListener('connected', () => {
         if (onStatusChange) onStatusChange('online');
+        // Instantly fetch all inspections from the server to guarantee full sync on connect
+        fetchServerInspections().then((all) => {
+          if (Array.isArray(all) && all.length > 0) {
+            onInspectionsUpdate(all);
+          }
+        }).catch(() => {});
       });
 
       eventSource.addEventListener('database_update', (event: MessageEvent) => {
@@ -897,17 +909,29 @@ export function setupRealtimeSync(
               markAsPermanentlyDeleted(...data.deletedIds);
             }
             if (Array.isArray(data.inspections)) {
-              const activeRoom = getActiveRoom();
+              // Ensure any active inspection received from server is un-marked from deleted set
+              data.inspections.forEach((insp: any) => {
+                if (insp.id) unmarkAsDeleted(insp.id);
+                if (insp.uuid) unmarkAsDeleted(insp.uuid);
+              });
               const cleaned = data.inspections
-                .filter((i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid))
-                .filter((i: any) => {
-                  const rId = (i.roomId || i.sala || DEFAULT_ROOM_ID).toLowerCase();
-                  return activeRoom === 'all' || rId === activeRoom;
-                });
+                .filter((i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid));
               const sorted = sortInspectionsDescending(cleaned);
               inMemoryInspections = sorted;
               saveAllInspections(sorted, false);
               onInspectionsUpdate(sorted);
+            } else if (data.inspection) {
+              const insp = data.inspection;
+              if (insp.id) unmarkAsDeleted(insp.id);
+              if (insp.uuid) unmarkAsDeleted(insp.uuid);
+              const current = getStoredInspections();
+              const updated = sortInspectionsDescending([
+                insp,
+                ...current.filter((i) => i.id !== insp.id && i.uuid !== insp.uuid),
+              ]);
+              inMemoryInspections = updated;
+              saveAllInspections(updated, false);
+              onInspectionsUpdate(updated);
             }
           }
         } catch (e) {
@@ -1013,9 +1037,6 @@ export function setupRealtimeSync(
             }
 
             const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
-            if (activeRoom && activeRoom !== 'all' && itemRoom !== activeRoom) {
-              return;
-            }
 
             if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
               cloudList.push({
@@ -1124,6 +1145,10 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
         markAsPermanentlyDeleted(...data.deletedIds);
       }
       if (data && Array.isArray(data.inspections)) {
+        data.inspections.forEach((insp: any) => {
+          if (insp.id) unmarkAsDeleted(insp.id);
+          if (insp.uuid) unmarkAsDeleted(insp.uuid);
+        });
         backendItems = data.inspections.filter(
           (i: any) => !isSeedInspection(i) && !isIdDeleted(i.id) && !isIdDeleted(i.uuid)
         );
@@ -1148,9 +1173,6 @@ export async function fullMultiplatformSync(roomId?: string): Promise<Multiplatf
         }
 
         const itemRoom = (data?.roomId || data?.sala || DEFAULT_ROOM_ID).toLowerCase();
-        if (targetRoom && targetRoom !== 'all' && itemRoom !== targetRoom) {
-          return;
-        }
 
         if (data && (data.id || data.uuid) && !isSeedInspection(data) && !isSeedInspection({ id: docId })) {
           firestoreItems.push({

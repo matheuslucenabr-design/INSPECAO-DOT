@@ -1,0 +1,23 @@
+{
+  "rooms": [
+    {
+      "id": "tecnico@inspecaopronto.com",
+      "name": "Sala Principal - Técnico",
+      "email": "tecnico@inspecaopronto.com",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "isDefault": true,
+      "description": "Sala unificada central do sistema para compartilhamento de todas as inspeções"
+    }
+  ],
+  "inspections": [],
+  "inspectionTypes": [
+    "Inspeção Pós-Serviço",
+    "Inspeção de Atividades",
+    "Inspeção de Luminárias",
+    "Inspeção de Redes",
+    "Inspeção de Redes Compartilhadas",
+    "Inspeção de 5S"
+  ],
+  "deletedIds": [],
+  "lastUpdated": "2026-09-08T22:18:58.099Z"
+}
